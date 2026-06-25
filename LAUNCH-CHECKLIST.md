@@ -60,8 +60,10 @@ Difficulty-Adjustment, Reorgs, Partitionen im Feld beobachten.
 
 ## 🔧 Betreiber-Konfiguration (vor Launch zu setzen)
 
-### S1. Genesis-Allokation festlegen (= gesamte Mainnet-Geldmenge!)
-ATLAS hat keine Bridge/Mint — die Genesis-Allokation ist die EINZIGE Geldquelle.
+### S1. Genesis-Allokation festlegen (= Anfangsverteilung der L2-Geldmenge)
+Die Genesis-Allokation ist die ANFANGSVERTEILUNG der L2-Geldmenge; dazu kommt die
+gedeckelte PoW-Emission (≤ 100 Mio ATL), die ebenfalls L2-Konten gutgeschrieben
+wird (Modell A). Es gibt keine L1↔L2-Bridge.
 1. Echte Allokation als JSON schreiben (Vorlage: `crates/atlas-zk/genesis/alloc.mainnet.example.json`):
    `[{"address":"<40 Hex>","balance":<ATOM u128>}, ...]`
 2. Datei nach `crates/atlas-zk/genesis/alloc.json` legen (wird per `include_str!`

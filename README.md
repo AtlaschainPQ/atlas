@@ -86,23 +86,34 @@ ATOM ermöglicht extrem niedrige Gebühren selbst bei hohem ATL-Preis (< 0,001 �
 
 ## Geldpolitik
 
-| Parameter          | Wert                       |
-|--------------------|----------------------------|
-| Startreward        | 64 ATL / Block             |
-| Halving-Intervall  | 210 240 Blöcke (~4 Jahre)  |
-| Blockzeit (Ziel)   | ~10 Minuten                |
-| Max. Supply        | ~26 910 720 ATL            |
-| Premine / Treasury | Keins                      |
+ATLAS hat **eine** Geldmenge, und sie lebt auf der **L2** (kontobasiert). Sie speist
+sich aus zwei Quellen, **beide direkt auf L2-Konten** gutgeschrieben:
+die **Genesis-Allokation** (Anfangsverteilung) und die **PoW-Block-Emission**.
+
+| Parameter          | Wert                                  |
+|--------------------|---------------------------------------|
+| Anfangsverteilung  | Genesis-Allokation (L2-Konten)        |
+| Start-Reward       | 200 ATL / Block                       |
+| Halving-Intervall  | 250 000 Blöcke (~4,75 Jahre), max. 32 |
+| Blockzeit (Ziel)   | ~10 Minuten (Mainnet)                 |
+| Emissions-Cap      | +100 000 000 ATL (gesamtes Mining)    |
+| Gesamtmenge        | Genesis-Allokation + ≤ 100 Mio ATL    |
+
+> **Modell A:** Die PoW-Emission wird **direkt den L2-Konten** von Miner/Prover
+> gutgeschrieben — es gibt **keinen separaten L1-Coin** und **keine Bridge**; die
+> L1 ist reine PoW-Sicherheits-/Settlement-Schicht. *(Status: als einheitliche
+> Geldpolitik beschlossen; Code-Umsetzung der L2-Gutschrift in Arbeit — aktuell
+> mintet der Code die Emission noch L1-seitig.)*
 
 ### Emissionsplan
 
 | Era | Startblock | ATL/Block | Era-Gesamt (ATL) |
-|-----|-----------|-----------|-----------------|
-| 0   | 0         | 64        | ~13 455 360     |
-| 1   | 210 240   | 32        | ~6 727 680      |
-| 2   | 420 480   | 16        | ~3 363 840      |
-| 3   | 630 720   | 8         | ~1 681 920      |
-| …   | …         | …         | …               |
+|-----|-----------|-----------|------------------|
+| 0   | 0         | 200       | 50 000 000       |
+| 1   | 250 000   | 100       | 25 000 000       |
+| 2   | 500 000   | 50        | 12 500 000       |
+| 3   | 750 000   | 25        | 6 250 000        |
+| …   | …         | …         | Σ → 100 000 000  |
 
 ### Reward-Verteilung
 

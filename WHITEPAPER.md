@@ -145,11 +145,17 @@ ATOM, `u128`):
 
 ### 3.4 Emission und Rewards
 
+ATLAS hat **eine** Geldmenge, die auf der L2 lebt (§4.5). Die hier beschriebene
+PoW-Emission wird **direkt L2-Konten** gutgeschrieben — es gibt **keinen separaten
+L1-Coin**.
+
 - **Initiale Subsidy:** 200 ATL pro Block.
 - **Halving:** alle 250.000 Blöcke (~4,75 Jahre), maximal 32 Halvings, danach 0.
-- **Maximale Gesamtmenge:** **100.000.000 ATL** (200 × 250.000 × 2).
-- **Reward-Split:** **70 % Miner / 30 % Prover (Aggregator)**. Der Prover-Anteil
-  entlohnt die rechenintensive Beweis-Erzeugung.
+- **Emissions-Obergrenze:** **100.000.000 ATL** (200 × 250.000 × 2) — die
+  Gesamtmenge ist **Genesis-Allokation + ≤ 100 Mio ATL** Emission.
+- **Reward-Split:** **70 % Miner / 30 % Prover (Aggregator)**, beide als
+  Gutschrift auf ihren L2-Konten. Der Prover-Anteil entlohnt die rechenintensive
+  Beweis-Erzeugung.
 - **Blockzeit (Mainnet):** 600 s (10 Minuten).
 - **Difficulty-Retarget:** alle 2016 Blöcke, maximale Änderung Faktor 4.
 - **Coinbase-Reife:** 100 Blöcke. **Bestätigungstiefe:** 6 Blöcke.
@@ -165,9 +171,9 @@ Merkle-Baum (`AccountTree`) der **Tiefe 32**, dessen Blätter Konten mit `(Balan
 Nonce)` sind. Die Wurzel dieses Baums ist die **L2-State-Root**.
 
 Die L2-State-Root wird on-chain fortgeschrieben: `BlockHeader.l2_state_root` und der
-`ChainState` führen die laufende Wurzel mit. Da ATLAS keine Bridge/Mint besitzt,
-verankert der Genesis-Block **nicht** den leeren Baum, sondern den **vorab
-geförderten** Zustand: die Konstante `GENESIS_L2_ROOT`. Sowohl der frische
+`ChainState` führen die laufende Wurzel mit. Da die Geldmenge auf L2 lebt und mit
+der Genesis-Allokation startet, verankert der Genesis-Block **nicht** den leeren
+Baum, sondern den **vorab geförderten** Zustand: die Konstante `GENESIS_L2_ROOT`. Sowohl der frische
 `ChainState` als auch der Genesis-Block tragen exakt diese Wurzel — andernfalls
 würde das allererste Settlement nicht anschließen. Die Übereinstimmung zwischen
 der Genesis-Allokationsdatei, `atlas-zk` und `atlas-core` wird durch einen
@@ -251,16 +257,28 @@ Der Node validiert die L2-Root-Kette (jeder `pre_root` muss an die aktuelle Wurz
 anschließen), verifiziert den Groth16-Beweis und prüft die Data-Availability-Bindung,
 bevor er die neue L2-State-Root übernimmt.
 
-### 4.5 Finanzierung: keine Bridge, kein Mint/Burn
+### 4.5 Finanzierung: ein Geld auf L2, keine Bridge (Modell A)
 
-ATLAS-Transaktionen für Nutzer laufen **ausschließlich über die L2**. Die gesamte
-L2-Geldmenge wird per **Genesis-Allokation** direkt auf L2-Konten verteilt; von dort
-sind alle Werttransfers reine L2-Transfers. Es gibt bewusst **keine** L1↔L2-Bridge
-und **keine** Mint-/Burn-Funktion. Dadurch bleibt die Zustandsschaltung
-transfer-only (Werterhaltung gilt strikt). Die L1 dient ausschließlich als
-PoW-Sicherheits- und Settlement-Schicht (Coinbase, SettlementBids).
+ATLAS hat **eine** Geldmenge, und sie lebt auf der **L2** (kontobasiert).
+Nutzer-Transaktionen laufen **ausschließlich über die L2**. Die Geldmenge hat
+**zwei Quellen, beide direkt auf L2-Konten**:
 
-Die Genesis-Allokation ist die **einzige Geldquelle** des Netzwerks und damit ein
+1. die **Genesis-Allokation** (Anfangsverteilung), und
+2. die **PoW-Block-Emission** (§3.4), die Miner und Prover (70/30) **direkt auf
+   ihren L2-Konten** gutgeschrieben wird.
+
+Die L1 trägt **keinen eigenen Coin** — sie ist reine PoW-Sicherheits-, Settlement-
+und Datenverfügbarkeits-Schicht. Weil aller Wert auf **einem** Ledger (L2) liegt,
+braucht es bewusst **keine L1↔L2-Bridge**. Wertänderungen auf L2 sind Transfers
+**plus** die deterministische, gedeckelte Emission (≤ 100 Mio ATL); die Gesamtmenge
+ist Genesis-Allokation + Emittiertes.
+
+> **Umsetzungsstatus:** Modell A (Emission als L2-Gutschrift) ist die beschlossene,
+> einheitliche Geldpolitik. Die Code-Umsetzung — die Coinbase kreditiert ein
+> L2-Konto, nativ über einen Merkle-Witness gegen die `l2_state_root` verifiziert —
+> ist **in Arbeit**; der aktuelle Code mintet die Emission noch L1-seitig.
+
+Die Genesis-Allokation ist die **Anfangsverteilung** des Netzwerks und damit ein
 zentraler Launch-Parameter. Sie ist **dateibasiert** definiert
 (`genesis/alloc.json`: Liste aus `{address, balance}`) und wird per `include_str!`
 in alle Binaries einkompiliert, sodass Node und Aggregator byte-identisch dieselbe

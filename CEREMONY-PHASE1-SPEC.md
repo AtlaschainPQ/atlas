@@ -19,9 +19,10 @@ ATLAS-L2 ist ein Groth16-ZK-Rollup über **BN254** (alt_bn128). Der
 `batch_size = L2_BATCH_SIZE = 16`) beweist gültige L2-Zustandsübergänge. Der Node
 verifiziert diese Beweise nativ gegen einen eingebetteten Verifying Key (`state_vk.bin`).
 
-**Ökonomische Besonderheit:** ATLAS hat **keine Bridge, kein Mint/Burn**. Die
-gesamte Geldmenge entsteht in der Genesis-Allokation; alle weiteren Bewegungen
-sind L2-Transfers, deren Korrektheit **ausschließlich** der Groth16-Beweis
+**Ökonomische Besonderheit:** ATLAS hat **keine L1↔L2-Bridge** — aller Wert lebt
+auf L2. Die Geldmenge ändert sich **ausschließlich** durch L2-Transfers und die
+deterministische, gedeckelte PoW-Emission (Modell A, ≤ 100 Mio ATL); jede solche
+Zustandsänderung wird **ausschließlich** durch den Groth16-Beweis
 garantiert. **Folge:** Wer gültige Beweise für FALSCHE Zustandsübergänge erzeugen
 kann, kann Guthaben aus dem Nichts schöpfen oder stehlen — ohne dass irgendeine
 andere Schicht das auffängt. Die Soundness des Setups ist damit gleichbedeutend
