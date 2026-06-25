@@ -1,0 +1,42 @@
+[package]
+name        = "atlas-zk"
+description = "Groth16 ZK-Beweis-System für ATLAS Settlement-Batches"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+# Standardmäßig native Performance (x86-asm + rayon-Parallelität). Für WASM
+# (Browser-Wallet) wird `default-features = false` gesetzt — dann ohne asm/rayon,
+# die in wasm32 nicht baubar sind. Das Signing (EdDSA/Poseidon) braucht beides nicht.
+[features]
+default     = ["native-perf"]
+native-perf = [
+    "ark-ff/asm", "ark-ff/parallel",
+    "ark-ec/parallel", "ark-std/parallel", "ark-poly/parallel",
+    "ark-groth16/parallel", "ark-crypto-primitives/parallel",
+]
+
+[dependencies]
+ark-ff        = { version = "0.4", features = ["std"] }
+ark-ec        = { version = "0.4" }
+ark-std       = { version = "0.4" }
+ark-poly      = { version = "0.4" }
+ark-serialize = { version = "0.4", features = ["derive"] }
+ark-relations = "0.4"
+ark-r1cs-std  = "0.4"
+ark-groth16   = { version = "0.4" }
+ark-bn254     = "0.4"
+ark-ed-on-bn254 = { version = "0.4", features = ["r1cs"] }
+ark-snark     = "0.4"
+ark-crypto-primitives = { version = "0.4", default-features = false, features = ["std", "sponge", "r1cs"] }
+
+sha2          = { workspace = true }
+rand_chacha   = { workspace = true }
+rand          = { workspace = true }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+anyhow        = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+hex           = { workspace = true }

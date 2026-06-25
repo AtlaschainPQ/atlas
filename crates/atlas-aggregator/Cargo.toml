@@ -1,0 +1,28 @@
+[package]
+name        = "atlas-aggregator"
+description = "ATLAS L2 Aggregator — sammelt L2-Transaktionen, erstellt ZK-Beweise, reicht Batches ein"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[[bin]]
+name = "atlas-aggregator"
+path = "src/main.rs"
+
+[dependencies]
+atlas-core = { workspace = true }
+atlas-zk   = { workspace = true }
+
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+bincode         = { workspace = true }
+hex             = { workspace = true }
+sha2            = { workspace = true }
+rand            = { workspace = true }
+tokio           = { workspace = true }
+anyhow          = { workspace = true }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot     = { workspace = true }

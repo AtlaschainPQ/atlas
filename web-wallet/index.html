@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ATLAS Wallet</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --bd:#30363d; --fg:#e6edf3; --mut:#8b949e;
+          --acc:#3b82f6; --ok:#2ea043; --err:#f85149; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,sans-serif; }
+  .wrap { max-width:680px; margin:0 auto; padding:24px 16px 80px; }
+  h1 { font-size:22px; margin:0 0 2px; } h1 small{color:var(--mut);font-weight:400;}
+  .warn { background:#3d2b00; border:1px solid #9e6a00; color:#ffd07a;
+          padding:10px 12px; border-radius:8px; font-size:13px; margin:14px 0; }
+  .card { background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:16px; margin:14px 0; }
+  .card h2 { font-size:14px; text-transform:uppercase; letter-spacing:.04em; color:var(--mut); margin:0 0 12px; }
+  label { display:block; font-size:12px; color:var(--mut); margin:8px 0 3px; }
+  input,textarea { width:100%; background:#0d1117; border:1px solid var(--bd); color:var(--fg);
+          border-radius:7px; padding:8px 10px; font:13px monospace; }
+  textarea { resize:vertical; min-height:64px; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:7px;
+           padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer; margin:6px 6px 0 0; }
+  button.sec { background:#21262d; border:1px solid var(--bd); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; } .row>div{flex:1; min-width:140px;}
+  .mono { font-family:monospace; font-size:12px; word-break:break-all; }
+  .bal { font-size:28px; font-weight:700; } .bal small{font-size:14px;color:var(--mut);font-weight:400;}
+  .mnem { background:#0d1117; border:1px dashed #9e6a00; border-radius:8px; padding:12px;
+          font:14px/1.8 monospace; letter-spacing:.02em; margin:8px 0; }
+  .danger { background:#3d1418; border:1px solid #8b2c33; color:#ff9b9b;
+            padding:10px 12px; border-radius:8px; font-size:13px; margin:10px 0; }
+  #log { background:#0d1117; border:1px solid var(--bd); border-radius:7px; padding:10px;
+         font:12px monospace; white-space:pre-wrap; max-height:180px; overflow:auto; color:var(--mut); }
+  .ok{color:var(--ok);} .err{color:var(--err);} .pill{font-size:11px;color:var(--mut);}
+  .tabs button{background:#21262d;border:1px solid var(--bd);}
+  .tabs button.on{background:var(--acc);border-color:var(--acc);}
+  .hide{display:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ATLAS Wallet <small>· L2 (Baby-Jubjub EdDSA)</small></h1>
+  <div class="warn">⚠️ <b>Testnet / experimentell.</b> Der Schlüssel wird mit deinem Passwort
+    verschlüsselt im Browser gespeichert (AES-GCM). Trotzdem: nicht auditiert, keine echten Werte.</div>
+
+  <div class="card">
+    <h2>Verbindung</h2>
+    <label>Aggregator-URL (L2-Senden & Guthaben)</label>
+    <input id="aggUrl" value="http://127.0.0.1:8390" />
+    <label>Node-RPC-URL (Forced Inclusion)</label>
+    <input id="nodeUrl" value="http://127.0.0.1:18634" />
+  </div>
+
+  <!-- Entsperren (wenn verschlüsseltes Konto existiert) -->
+  <div class="card hide" id="unlockCard">
+    <h2>Entsperren</h2>
+    <label>Passwort</label>
+    <input id="unlockPw" type="password" placeholder="dein Wallet-Passwort" />
+    <button id="unlockBtn">Entsperren</button>
+    <button class="sec" id="wipeBtn">Konto löschen</button>
+  </div>
+
+  <!-- Einrichten (kein Konto vorhanden) -->
+  <div class="card hide" id="setupCard">
+    <h2>Konto einrichten</h2>
+    <div class="tabs">
+      <button id="tabNew" class="on">Neu erzeugen</button>
+      <button id="tabImp">Importieren</button>
+    </div>
+
+    <div id="panelNew" style="margin-top:12px">
+      <div id="mnemBox" class="hide">
+        <div class="danger">📝 Notiere diese 24 Wörter in genau dieser Reihenfolge und bewahre sie
+          offline sicher auf. Sie sind das <b>einzige</b> Backup — wer sie hat, hat dein Geld.</div>
+        <div class="mnem" id="mnemWords"></div>
+        <label><input type="checkbox" id="mnemSaved" style="width:auto"> Ich habe die 24 Wörter sicher gesichert</label>
+      </div>
+      <button id="newBtn">Mnemonic erzeugen</button>
+    </div>
+
+    <div id="panelImp" class="hide" style="margin-top:12px">
+      <label>Mnemonic (12/24 Wörter) ODER 64-Hex-Secret</label>
+      <textarea id="impInput" placeholder="wort1 wort2 … oder abcdef… (32-Byte-Secret hex)"></textarea>
+    </div>
+
+    <div id="pwBox" class="hide">
+      <label>Passwort (verschlüsselt den Schlüssel lokal)</label>
+      <input id="pw1" type="password" placeholder="Passwort" />
+      <label>Passwort wiederholen</label>
+      <input id="pw2" type="password" placeholder="Passwort wiederholen" />
+      <button id="saveBtn">Verschlüsseln & speichern</button>
+    </div>
+  </div>
+
+  <!-- Konto (entsperrt) -->
+  <div class="card hide" id="acctCard">
+    <h2>Konto</h2>
+    <label>Adresse</label><div class="mono" id="addr"></div>
+    <label>Public Key</label><div class="mono" id="pub"></div>
+    <details><summary class="pill">Backup anzeigen (Mnemonic / Secret)</summary>
+      <div class="mono" id="backup" style="margin-top:6px"></div></details>
+    <div style="margin-top:10px">
+      <button class="sec" id="lockBtn">Sperren</button>
+      <button class="sec" id="removeBtn">Konto löschen</button>
+    </div>
+  </div>
+
+  <div class="card hide" id="balCard">
+    <h2>Guthaben</h2>
+    <div class="bal"><span id="bal">—</span> <small>ATL</small></div>
+    <div class="pill" id="balAtom"></div>
+    <div class="pill">nächste Nonce: <span id="nonce">—</span></div>
+    <button class="sec" id="refreshBtn" style="margin-top:10px">Aktualisieren</button>
+  </div>
+
+  <div class="card hide" id="sendCard">
+    <h2>L2 senden</h2>
+    <label>Empfänger-Adresse (40 Hex)</label>
+    <input id="toAddr" placeholder="z. B. abababab… (20 Byte)" />
+    <div class="row">
+      <div><label>Betrag (ATL)</label><input id="amt" value="0" /></div>
+      <div><label>Gebühr (ATOM)</label><input id="fee" value="5" /></div>
+    </div>
+    <button id="sendBtn">Senden (über Aggregator)</button>
+    <details style="margin-top:12px"><summary class="pill">Forced Inclusion (Zensurresistenz, via Node)</summary>
+      <label>sender_index (Konto-Index im L2-Baum)</label>
+      <input id="sidx" value="0" />
+      <button class="sec" id="forceBtn" style="margin-top:8px">Forced an Node senden</button>
+    </details>
+  </div>
+
+  <div class="card"><h2>Protokoll</h2><div id="log">bereit.</div></div>
+</div>
+
+<script type="module">
+import init, { generate_mnemonic, account_from_mnemonic, account_from_secret,
+  build_submit_tx, build_forced_tx } from './pkg/atlas_wallet_wasm.js';
+
+const ATOM_PER_ATL = 1_000_000_000_000n;
+const STORE = 'atlas_wallet_v2';
+const $ = id => document.getElementById(id);
+const log = (m, cls='') => { const d=$('log'); d.innerHTML += `\n<span class="${cls}">${m}</span>`; d.scrollTop=d.scrollHeight; };
+const show = (id,on=true) => $(id).classList.toggle('hide', !on);
+let acct = null;        // {secret,pubkey,address}
+let backupPayload = ''; // Mnemonic ODER Secret-Hex (für "Backup anzeigen")
+let pendingPayload = null; // im Setup: was beim Klick "speichern" verschlüsselt wird
+
+// ── Beträge ──────────────────────────────────────────────────────────────
+function atlToAtom(s){ s=(s||'0').trim(); if(!/^\d*(\.\d{0,12})?$/.test(s)) throw new Error('Ungültiger ATL-Betrag');
+  const [i,f=''] = s.split('.'); return (BigInt(i||'0')*ATOM_PER_ATL + BigInt((f+'000000000000').slice(0,12))).toString(); }
+const atomToAtl = a => { a=BigInt(a); const w=a/ATOM_PER_ATL, fr=(a%ATOM_PER_ATL).toString().padStart(12,'0').replace(/0+$/,''); return w.toString()+(fr?'.'+fr:''); };
+
+// ── Web-Crypto: PBKDF2 + AES-GCM ─────────────────────────────────────────
+const tEnc = new TextEncoder();
+const hb = b => [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');
+const bh = h => new Uint8Array(h.match(/.{2}/g).map(x=>parseInt(x,16)));
+async function deriveKey(pw, salt){
+  const base = await crypto.subtle.importKey('raw', tEnc.encode(pw), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:210000, hash:'SHA-256'},
+    base, {name:'AES-GCM', length:256}, false, ['encrypt','decrypt']);
+}
+async function encryptPayload(payload, pw){
+  const salt=crypto.getRandomValues(new Uint8Array(16)), iv=crypto.getRandomValues(new Uint8Array(12));
+  const key=await deriveKey(pw, salt);
+  const ct=await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, tEnc.encode(payload));
+  return JSON.stringify({v:1, salt:hb(salt), iv:hb(iv), ct:hb(ct)});
+}
+async function decryptPayload(blobStr, pw){
+  const b=JSON.parse(blobStr); const key=await deriveKey(pw, bh(b.salt));
+  const pt=await crypto.subtle.decrypt({name:'AES-GCM', iv:bh(b.iv)}, key, bh(b.ct));
+  return new TextDecoder().decode(pt);
+}
+
+// payload → Konto (Mnemonic, wenn Leerzeichen enthalten, sonst Secret-Hex)
+function accountFromPayload(payload){
+  return payload.trim().includes(' ')
+    ? JSON.parse(account_from_mnemonic(payload.trim()))
+    : JSON.parse(account_from_secret(payload.trim()));
+}
+
+function enterWallet(a, payload){
+  acct=a; backupPayload=payload;
+  $('addr').textContent=a.address; $('pub').textContent=a.pubkey;
+  $('backup').textContent = payload.includes(' ') ? payload : ('Secret: '+payload);
+  show('unlockCard',false); show('setupCard',false); show('acctCard');
+  show('balCard'); show('sendCard');
+  log('Konto entsperrt: '+a.address,'ok'); refresh();
+}
+
+// ── Boot: passenden Screen wählen ────────────────────────────────────────
+function boot(){
+  localStorage.removeItem('atlas_secret'); // alte Klartext-Version entfernen
+  if(localStorage.getItem(STORE)) show('unlockCard'); else show('setupCard');
+}
+
+// ── Setup-Tabs ───────────────────────────────────────────────────────────
+$('tabNew').onclick=()=>{ $('tabNew').classList.add('on'); $('tabImp').classList.remove('on');
+  show('panelNew'); show('panelImp',false); show('pwBox',false); pendingPayload=null; };
+$('tabImp').onclick=()=>{ $('tabImp').classList.add('on'); $('tabNew').classList.remove('on');
+  show('panelImp'); show('panelNew',false); show('pwBox'); pendingPayload='import'; };
+
+$('newBtn').onclick=()=>{ try{
+  const g=JSON.parse(generate_mnemonic());
+  $('mnemWords').textContent=g.mnemonic; show('mnemBox'); $('newBtn').classList.add('hide');
+  pendingPayload=g.mnemonic; checkReady();
+}catch(e){log('Fehler: '+e,'err');} };
+$('mnemSaved').onchange=checkReady;
+$('impInput').oninput=()=>{ pendingPayload = $('impInput').value.trim(); };
+function checkReady(){ show('pwBox', !!pendingPayload && (!$('mnemBox').classList.contains('hide') ? $('mnemSaved').checked : true)); }
+
+$('saveBtn').onclick=async()=>{ try{
+  const p = pendingPayload==='import' ? $('impInput').value.trim() : pendingPayload;
+  if(!p) throw new Error('nichts zu speichern');
+  const a = accountFromPayload(p); // validiert Mnemonic/Secret
+  const pw=$('pw1').value; if(pw.length<6) throw new Error('Passwort: mind. 6 Zeichen');
+  if(pw!==$('pw2').value) throw new Error('Passwörter stimmen nicht überein');
+  localStorage.setItem(STORE, await encryptPayload(p, pw));
+  log('Schlüssel verschlüsselt gespeichert.','ok');
+  enterWallet(a, p);
+}catch(e){log('Speichern fehlgeschlagen: '+e,'err');} };
+
+$('unlockBtn').onclick=async()=>{ try{
+  const p = await decryptPayload(localStorage.getItem(STORE), $('unlockPw').value);
+  enterWallet(accountFromPayload(p), p); $('unlockPw').value='';
+}catch(e){ log('Entsperren fehlgeschlagen (falsches Passwort?).','err'); } };
+
+$('lockBtn').onclick=()=>{ acct=null; backupPayload=''; location.reload(); };
+const wipe=()=>{ if(confirm('Konto wirklich löschen? Ohne Backup ist es weg.')){ localStorage.removeItem(STORE); location.reload(); } };
+$('wipeBtn').onclick=wipe; $('removeBtn').onclick=wipe;
+
+// ── Guthaben / Senden ────────────────────────────────────────────────────
+async function refresh(){ if(!acct) return; try{
+  const r=await fetch($('aggUrl').value.replace(/\/$/,'')+'/account/'+acct.address);
+  const j=await r.json();
+  $('bal').textContent=atomToAtl(j.balance); $('balAtom').textContent=j.balance+' ATOM';
+  $('nonce').textContent=j.nonce; log('Guthaben aktualisiert.','ok');
+}catch(e){ log('Guthaben-Abruf fehlgeschlagen (Aggregator läuft? CORS?): '+e,'err'); } }
+$('refreshBtn').onclick=refresh;
+
+$('sendBtn').onclick=async()=>{ try{
+  const nonce=BigInt($('nonce').textContent.match(/\d+/)?.[0]||'0');
+  const amount=atlToAtom($('amt').value);
+  const txJson=build_submit_tx(acct.secret, $('toAddr').value.trim(), amount, $('fee').value.trim(), nonce);
+  log('Sende '+atomToAtl(amount)+' ATL (nonce '+nonce+') …');
+  const r=await fetch($('aggUrl').value.replace(/\/$/,'')+'/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:txJson});
+  const j=await r.json();
+  if(j.status==='accepted'){ log('✓ angenommen: '+(j.tx_hash||''),'ok'); setTimeout(refresh,1500); }
+  else log('abgelehnt: '+JSON.stringify(j),'err');
+}catch(e){ log('Sende-Fehler: '+e,'err'); } };
+
+$('forceBtn').onclick=async()=>{ try{
+  const nonce=BigInt($('nonce').textContent.match(/\d+/)?.[0]||'0');
+  const amount=atlToAtom($('amt').value);
+  const p=JSON.parse(build_forced_tx(acct.secret, $('toAddr').value.trim(), amount, $('fee').value.trim(), nonce, BigInt($('sidx').value.trim()||'0')));
+  log('Forced Inclusion an Node …');
+  const r=await fetch($('nodeUrl').value.replace(/\/$/,''),{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({jsonrpc:'2.0',id:1,method:'forcel2tx',params:[p]})});
+  const j=await r.json();
+  if(j.result) log('✓ forced akzeptiert: '+JSON.stringify(j.result),'ok');
+  else log('forced abgelehnt: '+JSON.stringify(j.error||j),'err');
+}catch(e){ log('Forced-Fehler: '+e,'err'); } };
+
+await init();
+log('WASM geladen. ✓');
+boot();
+</script>
+</body>
+</html>

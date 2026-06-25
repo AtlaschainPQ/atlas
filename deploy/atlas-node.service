@@ -1,0 +1,45 @@
+[Unit]
+Description=ATLAS Blockchain Node
+Documentation=https://github.com/atlas-network/atlas
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=atlas
+Group=atlas
+WorkingDirectory=/var/lib/atlas
+
+# Binary
+ExecStart=/usr/local/bin/atlas-node \
+    --config /etc/atlas/atlas.json \
+    --data-dir /var/lib/atlas \
+    --log-level info
+
+# Neustart bei Absturz (nicht bei manuellem Stop)
+Restart=on-failure
+RestartSec=10s
+
+# Dateideskriptoren
+LimitNOFILE=65536
+
+# Sicherheit
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/atlas /etc/atlas
+PrivateTmp=true
+PrivateDevices=true
+
+# Logging zu journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=atlas-node
+
+# Umgebungsvariablen
+Environment=ATLAS_LOG=info
+
+[Install]
+WantedBy=multi-user.target

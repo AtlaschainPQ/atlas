@@ -1,0 +1,24 @@
+[package]
+name        = "atlas-triad"
+description = "TRIAD: Memory-Hard Proof-of-Work (Memory Bandwidth × Cache × Network Entropy)"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[dependencies]
+atlas-core  = { workspace = true }
+serde       = { workspace = true }
+sha2        = { workspace = true }
+sha3        = { workspace = true }
+blake3      = { workspace = true }
+rand        = { workspace = true }
+rand_chacha = { workspace = true }
+rayon       = { workspace = true }
+parking_lot = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
+tracing     = { workspace = true }
+
+[dev-dependencies]
+criterion   = "0.5"

@@ -1,0 +1,27 @@
+[package]
+name        = "atlas-core"
+description = "Core types: currency, blocks, transactions, cryptography"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[dependencies]
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+bincode     = { workspace = true }
+sha2        = { workspace = true }
+sha3        = { workspace = true }
+blake3      = { workspace = true }
+ripemd      = { workspace = true }
+secp256k1   = { workspace = true }
+fips204     = { workspace = true }
+rand        = { workspace = true }
+hex         = { workspace = true }
+zeroize     = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
+num-bigint  = { workspace = true }
+num-traits  = { workspace = true }
+chrono      = { workspace = true }
+smallvec    = { workspace = true }

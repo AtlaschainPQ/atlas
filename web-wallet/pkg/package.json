@@ -1,0 +1,17 @@
+{
+  "name": "atlas-wallet-wasm",
+  "type": "module",
+  "description": "ATLAS Web-Wallet — Baby-Jubjub-EdDSA-Signing (L2) als WASM",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "atlas_wallet_wasm_bg.wasm",
+    "atlas_wallet_wasm.js",
+    "atlas_wallet_wasm.d.ts"
+  ],
+  "main": "atlas_wallet_wasm.js",
+  "types": "atlas_wallet_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

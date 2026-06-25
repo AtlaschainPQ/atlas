@@ -1,0 +1,29 @@
+[package]
+name        = "atlas-wallet"
+description = "ATLAS Wallet — Key management, transaction building, CLI"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[[bin]]
+name = "atlas-wallet"
+path = "src/main.rs"
+
+[dependencies]
+atlas-core      = { workspace = true }
+atlas-consensus = { workspace = true }
+atlas-zk        = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+bincode         = { workspace = true }
+hex             = { workspace = true }
+rand            = { workspace = true }
+zeroize         = { workspace = true }
+aes-gcm         = { workspace = true }
+argon2          = { workspace = true }
+rpassword       = { workspace = true }
+tokio           = { workspace = true }
+anyhow          = { workspace = true }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }

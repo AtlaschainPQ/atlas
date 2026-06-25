@@ -1,0 +1,76 @@
+[workspace]
+members = [
+    "crates/atlas-core",
+    "crates/atlas-consensus",
+    "crates/atlas-triad",
+    "crates/atlas-state",
+    "crates/atlas-mempool",
+    "crates/atlas-node",
+    "crates/atlas-wallet",
+    "crates/atlas-zk",
+    "crates/atlas-aggregator",
+    "crates/atlas-sender",
+]
+resolver = "2"
+
+[workspace.package]
+version    = "0.1.0"
+edition    = "2021"
+authors    = ["ATLAS Contributors"]
+license    = "MIT"
+
+[workspace.dependencies]
+# Serialization
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+bincode     = "1"
+
+# Hashing / Crypto
+sha2        = "0.10"
+sha3        = "0.10"
+blake3      = "1"
+ripemd      = "0.1"
+secp256k1   = { version = "0.28", features = ["rand", "recovery"] }
+fips204     = "0.4"
+rand        = "0.8"
+rand_chacha = "0.3"
+hex         = "0.4"
+zeroize     = { version = "1", features = ["derive"] }
+aes-gcm     = "0.10"
+argon2      = "0.5"
+rpassword   = "7"
+
+# Async / Networking
+tokio           = { version = "1", features = ["full"] }
+tokio-util      = "0.7"
+tokio-rustls    = "0.26"
+bytes           = "1"
+quinn           = "0.11"
+rustls          = { version = "0.23", features = ["ring"] }
+rcgen           = "0.13"
+
+# Storage
+rocksdb     = { version = "0.22", features = ["lz4", "zstd"] }
+
+# Logging / Error handling
+tracing          = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow      = "1"
+thiserror   = "1"
+
+# Utilities
+chrono      = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+dashmap     = "5"
+rayon       = "1"
+num-bigint  = { version = "0.4", features = ["serde"] }
+num-traits  = "0.2"
+smallvec    = "1"
+
+# Internal crates
+atlas-core      = { path = "crates/atlas-core" }
+atlas-consensus = { path = "crates/atlas-consensus" }
+atlas-triad     = { path = "crates/atlas-triad" }
+atlas-state     = { path = "crates/atlas-state" }
+atlas-mempool   = { path = "crates/atlas-mempool" }
+atlas-zk        = { path = "crates/atlas-zk" }

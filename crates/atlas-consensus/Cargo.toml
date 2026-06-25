@@ -1,0 +1,17 @@
+[package]
+name        = "atlas-consensus"
+description = "ATLAS consensus rules: block validation, difficulty adjustment, reward calculation"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[dependencies]
+atlas-core  = { workspace = true }
+atlas-triad = { workspace = true }
+serde       = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
+tracing     = { workspace = true }
+num-bigint  = { workspace = true }
+num-traits  = { workspace = true }

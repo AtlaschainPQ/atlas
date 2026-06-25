@@ -1,0 +1,60 @@
+# Rust
+/target/
+web-wallet/target/
+**/*.rs.bak
+
+# WASM-Web-Wallet: web-wallet/pkg/ (wasm-pack-Output) WIRD committet, damit die
+# Wallet ohne Toolchain läuft. Nur das Cargo-Build-Verzeichnis (oben) ausschließen.
+
+# TypeScript-Wallet (wallet/)
+node_modules/
+wallet/dist/
+
+# Node-Daten (lokal, nicht versionieren)
+data/
+*/data/
+
+# TLS-Schlüssel (werden lokal generiert, NICHT ins Repo)
+node_key.der
+node_cert.der
+known_peers.json
+
+# ZK-Schlüssel:
+#  - keys/vk.bin, keys/pk.bin, keys/state_vk.bin gehören INS Repo
+#    (per include_bytes! ins Binary eingebettet → ohne sie kompiliert nichts).
+#    Es sind ÖFFENTLICHE Keys; Soundness hängt an der Geheimhaltung des
+#    Setup-„toxic waste", nicht am veröffentlichten Proving Key.
+#  - keys/state_pk.bin (~281 MB) ist NUR für Aggregatoren, NICHT im Repo.
+keys/state_pk.bin
+**/state_pk.bin
+
+# Private Deploy-/Server-Skripte (enthalten interne Server-Adresse/IP) — NICHT veröffentlichen
+sync-to-server.sh
+atlas-deploy.sh
+atlas-testnet-tx.sh
+*.server.json
+
+# Zeremonie-Zwischenstände (nur finales ceremony.json ins Repo)
+ceremony_*.json
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# C++ Miner-Build-Artefakte (Quellen ja, Binaries/Build-Output nein)
+miner/build/
+miner/triad_bench
+miner/triad_test
+*.o
+*.obj

@@ -1,0 +1,46 @@
+[package]
+name        = "atlas-node"
+description = "ATLAS full node binary"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[[bin]]
+name = "atlas-node"
+path = "src/main.rs"
+
+[[bin]]
+name = "atlas-cli"
+path = "src/cli.rs"
+
+[dependencies]
+atlas-core      = { workspace = true }
+atlas-consensus = { workspace = true }
+atlas-triad     = { workspace = true }
+atlas-state     = { workspace = true }
+atlas-mempool   = { workspace = true }
+atlas-zk        = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+bincode         = { workspace = true }
+hex             = { workspace = true }
+sha2            = { workspace = true }
+tokio           = { workspace = true }
+tokio-util      = { workspace = true }
+tokio-rustls    = { workspace = true }
+bytes           = { workspace = true }
+rustls          = { workspace = true }
+rcgen           = { workspace = true }
+thiserror       = { workspace = true }
+anyhow          = { workspace = true }
+tracing         = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot     = { workspace = true }
+dashmap         = { workspace = true }
+
+[dev-dependencies]
+# Nur für den #[ignore] State-Transition-E2E-Test (echter Groth16-Beweis).
+ark-bn254       = "0.4"
+ark-ed-on-bn254 = "0.4"
+ark-ff          = "0.4"

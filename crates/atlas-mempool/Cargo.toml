@@ -1,0 +1,18 @@
+[package]
+name        = "atlas-mempool"
+description = "ATLAS mempool: TX ordering, stamp verification, spam resistance"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[dependencies]
+atlas-core      = { workspace = true }
+atlas-consensus = { workspace = true }
+atlas-state     = { workspace = true }
+serde           = { workspace = true }
+thiserror       = { workspace = true }
+anyhow          = { workspace = true }
+tracing         = { workspace = true }
+parking_lot     = { workspace = true }
+dashmap         = { workspace = true }
