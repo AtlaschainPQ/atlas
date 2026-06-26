@@ -160,7 +160,9 @@ async fn route(
                 "200 OK",
                 serde_json::json!({
                     "address": addr_hex,
-                    "balance": balance,   // ATOM (u128)
+                    // ATOM (u128) als STRING — als JSON-Zahl verlöre ein
+                    // JS-Client (Number = f64) bei Beträgen > 2^53 ATOM Präzision.
+                    "balance": balance.to_string(),
                     "nonce":   nonce,     // nächste zu verwendende Nonce
                 }).to_string()
             )

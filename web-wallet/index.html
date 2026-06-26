@@ -5,264 +5,461 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ATLAS Wallet</title>
 <style>
-  :root { --bg:#0d1117; --card:#161b22; --bd:#30363d; --fg:#e6edf3; --mut:#8b949e;
-          --acc:#3b82f6; --ok:#2ea043; --err:#f85149; }
+  :root {
+    --bg:#0b0e14; --bg2:#0d1117; --card:#161b22; --card2:#1c2230; --bd:#2a3038;
+    --fg:#e6edf3; --mut:#8b949e; --acc:#3b82f6; --acc2:#2563eb;
+    --ok:#2ea043; --err:#f85149; --warn:#d29922;
+    --shadow:0 4px 16px rgba(0,0,0,.35);
+  }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,sans-serif; }
-  .wrap { max-width:680px; margin:0 auto; padding:24px 16px 80px; }
-  h1 { font-size:22px; margin:0 0 2px; } h1 small{color:var(--mut);font-weight:400;}
-  .warn { background:#3d2b00; border:1px solid #9e6a00; color:#ffd07a;
-          padding:10px 12px; border-radius:8px; font-size:13px; margin:14px 0; }
-  .card { background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:16px; margin:14px 0; }
-  .card h2 { font-size:14px; text-transform:uppercase; letter-spacing:.04em; color:var(--mut); margin:0 0 12px; }
-  label { display:block; font-size:12px; color:var(--mut); margin:8px 0 3px; }
-  input,textarea { width:100%; background:#0d1117; border:1px solid var(--bd); color:var(--fg);
-          border-radius:7px; padding:8px 10px; font:13px monospace; }
-  textarea { resize:vertical; min-height:64px; }
-  button { background:var(--acc); color:#fff; border:0; border-radius:7px;
-           padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer; margin:6px 6px 0 0; }
-  button.sec { background:#21262d; border:1px solid var(--bd); }
-  button:disabled { opacity:.5; cursor:not-allowed; }
-  .row { display:flex; gap:10px; flex-wrap:wrap; } .row>div{flex:1; min-width:140px;}
-  .mono { font-family:monospace; font-size:12px; word-break:break-all; }
-  .bal { font-size:28px; font-weight:700; } .bal small{font-size:14px;color:var(--mut);font-weight:400;}
-  .mnem { background:#0d1117; border:1px dashed #9e6a00; border-radius:8px; padding:12px;
-          font:14px/1.8 monospace; letter-spacing:.02em; margin:8px 0; }
-  .danger { background:#3d1418; border:1px solid #8b2c33; color:#ff9b9b;
-            padding:10px 12px; border-radius:8px; font-size:13px; margin:10px 0; }
-  #log { background:#0d1117; border:1px solid var(--bd); border-radius:7px; padding:10px;
-         font:12px monospace; white-space:pre-wrap; max-height:180px; overflow:auto; color:var(--mut); }
-  .ok{color:var(--ok);} .err{color:var(--err);} .pill{font-size:11px;color:var(--mut);}
-  .tabs button{background:#21262d;border:1px solid var(--bd);}
-  .tabs button.on{background:var(--acc);border-color:var(--acc);}
-  .hide{display:none;}
+  html,body { margin:0; }
+  body { background:radial-gradient(1200px 600px at 50% -10%, #15233f 0%, var(--bg) 55%);
+         color:var(--fg); font:14px/1.55 system-ui,-apple-system,Segoe UI,sans-serif; min-height:100vh; }
+  .wrap { max-width:560px; margin:0 auto; padding:20px 14px 90px; }
+
+  header { display:flex; align-items:center; gap:10px; margin:6px 2px 16px; }
+  .logo { width:34px; height:34px; border-radius:9px; flex:none;
+          background:linear-gradient(135deg,#3b82f6,#8b5cf6); display:grid; place-items:center;
+          font-weight:800; color:#fff; box-shadow:var(--shadow); }
+  header h1 { font-size:18px; margin:0; font-weight:700; }
+  header .sub { font-size:11px; color:var(--mut); margin-top:1px; }
+  .net-dot { margin-left:auto; display:flex; align-items:center; gap:6px; font-size:11px; color:var(--mut);
+             background:var(--card); border:1px solid var(--bd); padding:5px 9px; border-radius:20px; cursor:pointer; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--mut); }
+  .dot.on { background:var(--ok); box-shadow:0 0 6px var(--ok); }
+  .dot.off { background:var(--err); }
+
+  .warn { background:#2b220a; border:1px solid #6b5210; color:#ffd98a;
+          padding:9px 12px; border-radius:9px; font-size:12px; margin:0 0 14px; }
+  .card { background:var(--card); border:1px solid var(--bd); border-radius:13px;
+          padding:16px; margin:13px 0; box-shadow:var(--shadow); }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--mut); margin:0 0 12px; font-weight:600; }
+  label { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; }
+  input,textarea,select { width:100%; background:var(--bg2); border:1px solid var(--bd); color:var(--fg);
+          border-radius:9px; padding:10px 12px; font:13px ui-monospace,SFMono-Regular,Menlo,monospace; outline:none; }
+  input:focus,textarea:focus,select:focus { border-color:var(--acc); box-shadow:0 0 0 3px rgba(59,130,246,.15); }
+  textarea { resize:vertical; min-height:60px; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:9px;
+           padding:10px 16px; font-size:13px; font-weight:600; cursor:pointer; transition:.12s; }
+  button:hover { background:var(--acc2); } button:active { transform:translateY(1px); }
+  button.sec { background:#21262d; border:1px solid var(--bd); } button.sec:hover{ background:#2a313c; }
+  button.ghost { background:transparent; border:1px solid var(--bd); color:var(--mut); }
+  button.full { width:100%; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .btnrow { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .row { display:flex; gap:10px; } .row>div{ flex:1; }
+  .mono { font-family:ui-monospace,Menlo,monospace; font-size:12px; word-break:break-all; }
+  .muted { color:var(--mut); } .small { font-size:12px; } .ok{color:var(--ok);} .err{color:var(--err);}
+  .hide{ display:none !important; }
+
+  /* Balance */
+  .bal-card { background:linear-gradient(135deg,#1b2740,#161b22); text-align:center; }
+  .bal { font-size:38px; font-weight:800; letter-spacing:-.02em; }
+  .bal small{ font-size:16px; color:var(--mut); font-weight:500; margin-left:4px; }
+  .bal-sub { color:var(--mut); font-size:12px; margin-top:2px; }
+  .addr-chip { display:inline-flex; align-items:center; gap:8px; margin-top:12px; background:var(--bg2);
+               border:1px solid var(--bd); border-radius:20px; padding:6px 12px; font-size:12px; cursor:pointer; }
+
+  /* Account selector */
+  .acct-sel { display:flex; align-items:center; gap:8px; }
+  .acct-sel select { flex:1; }
+
+  /* Tabs */
+  .tabs { display:flex; gap:4px; background:var(--bg2); border:1px solid var(--bd); border-radius:11px; padding:4px; margin:13px 0; }
+  .tabs button { flex:1; background:transparent; color:var(--mut); border-radius:8px; padding:9px; font-weight:600; }
+  .tabs button.on { background:var(--acc); color:#fff; }
+
+  /* History */
+  .tx { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--bd); }
+  .tx:last-child{ border-bottom:0; }
+  .tx .ic { width:30px; height:30px; border-radius:50%; flex:none; display:grid; place-items:center;
+            background:#21262d; font-size:14px; }
+  .tx .meta { flex:1; min-width:0; } .tx .meta .t { font-size:13px; } .tx .meta .s { font-size:11px; color:var(--mut); }
+  .tx .amt { font-weight:600; font-size:13px; text-align:right; white-space:nowrap; }
+  .badge { font-size:10px; padding:2px 7px; border-radius:10px; font-weight:600; }
+  .badge.ok{ background:#0e2f1a; color:#3fb950; } .badge.err{ background:#3d1418; color:#ff7b72; }
+  .badge.pend{ background:#2b220a; color:#e3b341; }
+
+  /* Mnemonic */
+  .mnem { background:var(--bg2); border:1px dashed var(--warn); border-radius:10px; padding:12px;
+          display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:10px 0; }
+  .mnem span { font:13px ui-monospace,monospace; counter-increment:w; }
+  .mnem span::before { content:counter(w) ". "; color:var(--mut); font-size:10px; }
+  .mnem { counter-reset:w; }
+  .danger { background:#3d1418; border:1px solid #8b2c33; color:#ff9b9b; padding:10px 12px; border-radius:9px; font-size:12px; margin:8px 0; }
+
+  /* Toast */
+  #toasts { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); z-index:50;
+            display:flex; flex-direction:column; gap:8px; width:min(92vw,480px); }
+  .toast { background:var(--card2); border:1px solid var(--bd); border-left:3px solid var(--acc);
+           border-radius:9px; padding:11px 14px; font-size:13px; box-shadow:var(--shadow); animation:slide .2s; }
+  .toast.ok{ border-left-color:var(--ok); } .toast.err{ border-left-color:var(--err); }
+  @keyframes slide { from{ opacity:0; transform:translateY(8px);} to{opacity:1;} }
+
+  .link { color:var(--acc); cursor:pointer; text-decoration:none; }
+  details summary { cursor:pointer; color:var(--mut); font-size:12px; }
+  .ab-item { display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--bd); font-size:13px; }
+  .ab-item:last-child{ border-bottom:0; }
+  .ab-item .a { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>ATLAS Wallet <small>· L2 (Baby-Jubjub EdDSA)</small></h1>
-  <div class="warn">⚠️ <b>Testnet / experimentell.</b> Der Schlüssel wird mit deinem Passwort
-    verschlüsselt im Browser gespeichert (AES-GCM). Trotzdem: nicht auditiert, keine echten Werte.</div>
+  <header>
+    <div class="logo">A</div>
+    <div>
+      <h1>ATLAS Wallet</h1>
+      <div class="sub">L2 · Baby-Jubjub EdDSA</div>
+    </div>
+    <div class="net-dot" id="netChip" title="Netzwerk-Einstellungen"><span class="dot" id="netDot"></span><span id="netName">—</span></div>
+  </header>
 
-  <div class="card">
-    <h2>Verbindung</h2>
-    <label>Aggregator-URL (L2-Senden & Guthaben)</label>
-    <input id="aggUrl" value="http://127.0.0.1:8390" />
-    <label>Node-RPC-URL (Forced Inclusion)</label>
-    <input id="nodeUrl" value="http://127.0.0.1:18634" />
-  </div>
+  <div class="warn">⚠️ <b>Testnet / experimentell.</b> Schlüssel liegen mit deinem Passwort verschlüsselt (AES-GCM) im Browser. Nicht auditiert — keine echten Werte.</div>
 
-  <!-- Entsperren (wenn verschlüsseltes Konto existiert) -->
+  <!-- ENTSPERREN -->
   <div class="card hide" id="unlockCard">
-    <h2>Entsperren</h2>
+    <h2>Wallet entsperren</h2>
     <label>Passwort</label>
     <input id="unlockPw" type="password" placeholder="dein Wallet-Passwort" />
-    <button id="unlockBtn">Entsperren</button>
-    <button class="sec" id="wipeBtn">Konto löschen</button>
+    <div class="btnrow">
+      <button id="unlockBtn">Entsperren</button>
+      <button class="ghost" id="wipeBtn">Alles löschen</button>
+    </div>
   </div>
 
-  <!-- Einrichten (kein Konto vorhanden) -->
+  <!-- SETUP -->
   <div class="card hide" id="setupCard">
     <h2>Konto einrichten</h2>
     <div class="tabs">
       <button id="tabNew" class="on">Neu erzeugen</button>
       <button id="tabImp">Importieren</button>
     </div>
-
-    <div id="panelNew" style="margin-top:12px">
+    <div id="panelNew">
       <div id="mnemBox" class="hide">
-        <div class="danger">📝 Notiere diese 24 Wörter in genau dieser Reihenfolge und bewahre sie
-          offline sicher auf. Sie sind das <b>einzige</b> Backup — wer sie hat, hat dein Geld.</div>
+        <div class="danger">📝 Notiere diese 24 Wörter in genau dieser Reihenfolge, offline. Sie sind das <b>einzige</b> Backup.</div>
         <div class="mnem" id="mnemWords"></div>
-        <label><input type="checkbox" id="mnemSaved" style="width:auto"> Ich habe die 24 Wörter sicher gesichert</label>
+        <label><input type="checkbox" id="mnemSaved" style="width:auto;vertical-align:middle"> Ich habe die Wörter sicher gesichert</label>
       </div>
-      <button id="newBtn">Mnemonic erzeugen</button>
+      <div class="btnrow"><button id="newBtn">Mnemonic erzeugen</button></div>
     </div>
-
-    <div id="panelImp" class="hide" style="margin-top:12px">
+    <div id="panelImp" class="hide">
       <label>Mnemonic (12/24 Wörter) ODER 64-Hex-Secret</label>
-      <textarea id="impInput" placeholder="wort1 wort2 … oder abcdef… (32-Byte-Secret hex)"></textarea>
+      <textarea id="impInput" placeholder="wort1 wort2 …  oder  abcdef… (32-Byte-Secret hex)"></textarea>
     </div>
-
     <div id="pwBox" class="hide">
-      <label>Passwort (verschlüsselt den Schlüssel lokal)</label>
-      <input id="pw1" type="password" placeholder="Passwort" />
-      <label>Passwort wiederholen</label>
-      <input id="pw2" type="password" placeholder="Passwort wiederholen" />
-      <button id="saveBtn">Verschlüsseln & speichern</button>
+      <label>Name (optional)</label>
+      <input id="acctName" placeholder="z. B. Haupt-Konto" />
+      <div class="row" id="pwPair">
+        <div><label>Passwort</label><input id="pw1" type="password" placeholder="mind. 6 Zeichen" /></div>
+        <div><label>Wiederholen</label><input id="pw2" type="password" placeholder="Passwort" /></div>
+      </div>
+      <div class="btnrow"><button id="saveBtn" class="full">Verschlüsseln &amp; speichern</button></div>
     </div>
   </div>
 
-  <!-- Konto (entsperrt) -->
-  <div class="card hide" id="acctCard">
-    <h2>Konto</h2>
-    <label>Adresse</label><div class="mono" id="addr"></div>
-    <label>Public Key</label><div class="mono" id="pub"></div>
-    <details><summary class="pill">Backup anzeigen (Mnemonic / Secret)</summary>
-      <div class="mono" id="backup" style="margin-top:6px"></div></details>
-    <div style="margin-top:10px">
-      <button class="sec" id="lockBtn">Sperren</button>
-      <button class="sec" id="removeBtn">Konto löschen</button>
+  <!-- HAUPT-APP -->
+  <div id="app" class="hide">
+    <div class="card acct-sel">
+      <select id="acctPick"></select>
+      <button class="sec" id="addAcctBtn" title="Konto hinzufügen">＋</button>
+      <button class="ghost" id="lockBtn" title="Sperren">🔒</button>
+    </div>
+
+    <div class="card bal-card">
+      <div class="bal"><span id="bal">—</span><small>ATL</small></div>
+      <div class="bal-sub" id="balAtom"></div>
+      <div class="addr-chip" id="addrChip"><span class="mono" id="addrShort"></span><span class="muted">⧉</span></div>
+    </div>
+
+    <div class="tabs">
+      <button class="on" data-tab="send">Senden</button>
+      <button data-tab="recv">Empfangen</button>
+      <button data-tab="hist">Verlauf</button>
+      <button data-tab="set">Einstellungen</button>
+    </div>
+
+    <!-- SENDEN -->
+    <div class="card tabpane" id="pane-send">
+      <h2>L2 senden</h2>
+      <label>Empfänger-Adresse (40 Hex)</label>
+      <input id="toAddr" list="abList" placeholder="abababab… (20 Byte)" />
+      <datalist id="abList"></datalist>
+      <div class="row">
+        <div><label>Betrag (ATL)</label><input id="amt" value="0" /></div>
+        <div><label>Gebühr (ATOM)</label><input id="fee" value="5" /></div>
+      </div>
+      <div class="btnrow"><button id="sendBtn" class="full">Senden</button></div>
+      <details style="margin-top:12px">
+        <summary>Forced Inclusion (Zensurresistenz, direkt an Node)</summary>
+        <label>sender_index (Konto-Index im L2-Baum)</label>
+        <input id="sidx" value="0" />
+        <div class="btnrow"><button class="sec" id="forceBtn">Forced an Node senden</button></div>
+        <div class="small muted" style="margin-top:6px">Erfordert erreichbare Node-RPC (siehe Einstellungen).</div>
+      </details>
+    </div>
+
+    <!-- EMPFANGEN -->
+    <div class="card tabpane hide" id="pane-recv">
+      <h2>Empfangen</h2>
+      <p class="small muted">Deine L2-Adresse — teile sie, um ATL zu empfangen.</p>
+      <div class="mono" id="recvAddr" style="background:var(--bg2);border:1px solid var(--bd);border-radius:9px;padding:12px"></div>
+      <div class="btnrow">
+        <button id="copyAddrBtn">Adresse kopieren</button>
+        <button class="sec" id="copyPubBtn">Public Key kopieren</button>
+      </div>
+      <details style="margin-top:12px">
+        <summary>Backup anzeigen (Mnemonic / Secret)</summary>
+        <div class="mono" id="backup" style="margin-top:8px;background:var(--bg2);border:1px dashed var(--warn);border-radius:9px;padding:10px"></div>
+      </details>
+    </div>
+
+    <!-- VERLAUF -->
+    <div class="card tabpane hide" id="pane-hist">
+      <h2 style="display:flex;justify-content:space-between;align-items:center">Verlauf
+        <span class="link small" id="histRefresh">↻ Status prüfen</span></h2>
+      <div id="histList"><p class="small muted">Noch keine Transaktionen.</p></div>
+    </div>
+
+    <!-- EINSTELLUNGEN -->
+    <div class="card tabpane hide" id="pane-set">
+      <h2>Netzwerk</h2>
+      <label>Voreinstellung</label>
+      <select id="netPreset">
+        <option value="testnet">ATLAS Testnet (192.168.1.185)</option>
+        <option value="local">Lokal (127.0.0.1)</option>
+        <option value="custom">Benutzerdefiniert</option>
+      </select>
+      <label>Aggregator-URL (Guthaben &amp; Senden)</label>
+      <input id="aggUrl" />
+      <label>Node-RPC-URL (Forced Inclusion)</label>
+      <input id="nodeUrl" />
+      <div class="btnrow"><button class="sec" id="netTest">Verbindung testen</button></div>
+
+      <h2 style="margin-top:20px">Adressbuch</h2>
+      <div class="row">
+        <div><input id="abLabel" placeholder="Name" /></div>
+        <div style="flex:2"><input id="abAddr" placeholder="40-Hex-Adresse" /></div>
+      </div>
+      <div class="btnrow"><button class="sec" id="abAdd">Hinzufügen</button></div>
+      <div id="abListUi" style="margin-top:6px"></div>
+
+      <h2 style="margin-top:20px">Konto</h2>
+      <div class="btnrow">
+        <button class="sec" id="renameBtn">Umbenennen</button>
+        <button class="ghost" id="removeBtn">Dieses Konto entfernen</button>
+      </div>
     </div>
   </div>
-
-  <div class="card hide" id="balCard">
-    <h2>Guthaben</h2>
-    <div class="bal"><span id="bal">—</span> <small>ATL</small></div>
-    <div class="pill" id="balAtom"></div>
-    <div class="pill">nächste Nonce: <span id="nonce">—</span></div>
-    <button class="sec" id="refreshBtn" style="margin-top:10px">Aktualisieren</button>
-  </div>
-
-  <div class="card hide" id="sendCard">
-    <h2>L2 senden</h2>
-    <label>Empfänger-Adresse (40 Hex)</label>
-    <input id="toAddr" placeholder="z. B. abababab… (20 Byte)" />
-    <div class="row">
-      <div><label>Betrag (ATL)</label><input id="amt" value="0" /></div>
-      <div><label>Gebühr (ATOM)</label><input id="fee" value="5" /></div>
-    </div>
-    <button id="sendBtn">Senden (über Aggregator)</button>
-    <details style="margin-top:12px"><summary class="pill">Forced Inclusion (Zensurresistenz, via Node)</summary>
-      <label>sender_index (Konto-Index im L2-Baum)</label>
-      <input id="sidx" value="0" />
-      <button class="sec" id="forceBtn" style="margin-top:8px">Forced an Node senden</button>
-    </details>
-  </div>
-
-  <div class="card"><h2>Protokoll</h2><div id="log">bereit.</div></div>
 </div>
+
+<div id="toasts"></div>
 
 <script type="module">
 import init, { generate_mnemonic, account_from_mnemonic, account_from_secret,
   build_submit_tx, build_forced_tx } from './pkg/atlas_wallet_wasm.js';
 
 const ATOM_PER_ATL = 1_000_000_000_000n;
-const STORE = 'atlas_wallet_v2';
 const $ = id => document.getElementById(id);
-const log = (m, cls='') => { const d=$('log'); d.innerHTML += `\n<span class="${cls}">${m}</span>`; d.scrollTop=d.scrollHeight; };
-const show = (id,on=true) => $(id).classList.toggle('hide', !on);
-let acct = null;        // {secret,pubkey,address}
-let backupPayload = ''; // Mnemonic ODER Secret-Hex (für "Backup anzeigen")
-let pendingPayload = null; // im Setup: was beim Klick "speichern" verschlüsselt wird
+const VAULT='atlas_wallet_vault', ACTIVE='atlas_wallet_active', AB='atlas_wallet_ab', NET='atlas_wallet_net';
+const PRESETS = {
+  testnet:{ name:'Testnet', agg:'http://192.168.1.185:8080', node:'http://192.168.1.185:18334' },
+  local:  { name:'Lokal',   agg:'http://127.0.0.1:8080',     node:'http://127.0.0.1:18334' },
+};
+
+let vault=null;     // { accounts:[{name,payload}] }  — entschlüsselt, nur im RAM
+let pw=null;        // Wallet-Passwort im RAM (nur während entsperrt; für Re-Encrypt)
+let acct=null;      // aktives {secret,pubkey,address}
+let backupPayload='';
+
+// ── Toast ────────────────────────────────────────────────────────────────
+function toast(msg, cls=''){ const t=document.createElement('div'); t.className='toast '+cls; t.textContent=msg;
+  $('toasts').appendChild(t); setTimeout(()=>{ t.style.opacity='0'; setTimeout(()=>t.remove(),300); }, 3200); }
+const show=(id,on=true)=>$(id).classList.toggle('hide',!on);
+async function copy(text,what='Kopiert'){ try{ await navigator.clipboard.writeText(text); toast(what+' ✓','ok'); }catch{ toast('Kopieren nicht möglich','err'); } }
+const shortAddr=a=>a?a.slice(0,8)+'…'+a.slice(-6):'';
 
 // ── Beträge ──────────────────────────────────────────────────────────────
 function atlToAtom(s){ s=(s||'0').trim(); if(!/^\d*(\.\d{0,12})?$/.test(s)) throw new Error('Ungültiger ATL-Betrag');
-  const [i,f=''] = s.split('.'); return (BigInt(i||'0')*ATOM_PER_ATL + BigInt((f+'000000000000').slice(0,12))).toString(); }
-const atomToAtl = a => { a=BigInt(a); const w=a/ATOM_PER_ATL, fr=(a%ATOM_PER_ATL).toString().padStart(12,'0').replace(/0+$/,''); return w.toString()+(fr?'.'+fr:''); };
+  const [i,f='']=s.split('.'); return (BigInt(i||'0')*ATOM_PER_ATL + BigInt((f+'000000000000').slice(0,12))).toString(); }
+const atomToAtl=a=>{ a=BigInt(a); const w=a/ATOM_PER_ATL, fr=(a%ATOM_PER_ATL).toString().padStart(12,'0').replace(/0+$/,''); return w.toString()+(fr?'.'+fr:''); };
 
-// ── Web-Crypto: PBKDF2 + AES-GCM ─────────────────────────────────────────
-const tEnc = new TextEncoder();
-const hb = b => [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');
-const bh = h => new Uint8Array(h.match(/.{2}/g).map(x=>parseInt(x,16)));
-async function deriveKey(pw, salt){
-  const base = await crypto.subtle.importKey('raw', tEnc.encode(pw), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:210000, hash:'SHA-256'},
-    base, {name:'AES-GCM', length:256}, false, ['encrypt','decrypt']);
+// ── Web-Crypto: PBKDF2 + AES-GCM (unverändert, bewährt) ──────────────────
+const tEnc=new TextEncoder();
+const hb=b=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');
+const bh=h=>new Uint8Array(h.match(/.{2}/g).map(x=>parseInt(x,16)));
+async function deriveKey(pw,salt){ const base=await crypto.subtle.importKey('raw',tEnc.encode(pw),'PBKDF2',false,['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:210000,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']); }
+async function encryptStr(plain,pw){ const salt=crypto.getRandomValues(new Uint8Array(16)), iv=crypto.getRandomValues(new Uint8Array(12));
+  const key=await deriveKey(pw,salt); const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,tEnc.encode(plain));
+  return JSON.stringify({v:1,salt:hb(salt),iv:hb(iv),ct:hb(ct)}); }
+async function decryptStr(blob,pw){ const b=JSON.parse(blob); const key=await deriveKey(pw,bh(b.salt));
+  const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:bh(b.iv)},key,bh(b.ct)); return new TextDecoder().decode(pt); }
+
+function accountFromPayload(p){ p=p.trim(); return p.includes(' ')?JSON.parse(account_from_mnemonic(p)):JSON.parse(account_from_secret(p)); }
+async function saveVault(){ localStorage.setItem(VAULT, await encryptStr(JSON.stringify(vault), pw)); }
+
+// ── Netzwerk ─────────────────────────────────────────────────────────────
+function loadNet(){ let n; try{ n=JSON.parse(localStorage.getItem(NET)); }catch{} if(!n) n={preset:'testnet',...PRESETS.testnet};
+  $('aggUrl').value=n.agg; $('nodeUrl').value=n.node; $('netPreset').value=n.preset||'custom'; paintNet(); }
+function saveNet(){ const preset=$('netPreset').value;
+  localStorage.setItem(NET, JSON.stringify({preset,agg:$('aggUrl').value.trim(),node:$('nodeUrl').value.trim()})); paintNet(); }
+function paintNet(){ const p=$('netPreset').value; $('netName').textContent = PRESETS[p]?PRESETS[p].name:'Custom'; }
+const aggBase=()=>$('aggUrl').value.trim().replace(/\/$/,'');
+const nodeBase=()=>$('nodeUrl').value.trim().replace(/\/$/,'');
+$('netPreset').onchange=()=>{ const p=$('netPreset').value; if(PRESETS[p]){ $('aggUrl').value=PRESETS[p].agg; $('nodeUrl').value=PRESETS[p].node; } saveNet(); };
+$('aggUrl').oninput=()=>{ $('netPreset').value='custom'; saveNet(); };
+$('nodeUrl').oninput=()=>{ $('netPreset').value='custom'; saveNet(); };
+$('netChip').onclick=()=>switchTab('set');
+$('netTest').onclick=async()=>{ try{ const r=await fetch(aggBase()+'/account/'+'00'.repeat(20)); $('netDot').className='dot on';
+  toast('Aggregator erreichbar ✓','ok'); }catch(e){ $('netDot').className='dot off'; toast('Aggregator nicht erreichbar','err'); } };
+
+// ── Adressbuch ───────────────────────────────────────────────────────────
+const loadAB=()=>{ try{ return JSON.parse(localStorage.getItem(AB))||[]; }catch{ return []; } };
+const saveAB=ab=>localStorage.setItem(AB, JSON.stringify(ab));
+function renderAB(){ const ab=loadAB();
+  $('abList').innerHTML = ab.map(e=>`<option value="${e.address}">${e.label}</option>`).join('');
+  $('abListUi').innerHTML = ab.length? ab.map((e,i)=>
+    `<div class="ab-item"><b>${e.label}</b><span class="a mono muted">${e.address}</span>
+     <button class="ghost small" data-ab="${i}">✕</button></div>`).join('')
+    : '<p class="small muted">Leer.</p>';
+  $('abListUi').querySelectorAll('[data-ab]').forEach(b=>b.onclick=()=>{ const a=loadAB(); a.splice(+b.dataset.ab,1); saveAB(a); renderAB(); });
 }
-async function encryptPayload(payload, pw){
-  const salt=crypto.getRandomValues(new Uint8Array(16)), iv=crypto.getRandomValues(new Uint8Array(12));
-  const key=await deriveKey(pw, salt);
-  const ct=await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, tEnc.encode(payload));
-  return JSON.stringify({v:1, salt:hb(salt), iv:hb(iv), ct:hb(ct)});
+$('abAdd').onclick=()=>{ const label=$('abLabel').value.trim(), address=$('abAddr').value.trim().toLowerCase();
+  if(!/^[0-9a-f]{40}$/.test(address)) return toast('Adresse: 40 Hex erwartet','err'); if(!label) return toast('Name fehlt','err');
+  const ab=loadAB(); ab.push({label,address}); saveAB(ab); $('abLabel').value=''; $('abAddr').value=''; renderAB(); toast('Adresse gespeichert','ok'); };
+
+// ── Verlauf (lokal je Adresse) ───────────────────────────────────────────
+const histKey=a=>'atlas_wallet_hist_'+a;
+const loadHist=a=>{ try{ return JSON.parse(localStorage.getItem(histKey(a)))||[]; }catch{ return []; } };
+const saveHist=(a,h)=>localStorage.setItem(histKey(a), JSON.stringify(h.slice(0,100)));
+function addHist(entry){ const h=loadHist(acct.address); h.unshift(entry); saveHist(acct.address,h); renderHist(); }
+function renderHist(){ const h=acct?loadHist(acct.address):[];
+  $('histList').innerHTML = h.length? h.map(e=>{
+    const b = e.status==='accepted'?'<span class="badge ok">gesendet</span>'
+            : e.status==='forced'?'<span class="badge ok">forced</span>'
+            : e.status==='rejected'?'<span class="badge err">abgelehnt</span>'
+            : '<span class="badge pend">…</span>';
+    const d=new Date(e.ts).toLocaleString('de-DE');
+    return `<div class="tx"><div class="ic">↗</div><div class="meta"><div class="t">an ${shortAddr(e.to)} ${b}</div>
+      <div class="s">${d}${e.fee?' · Fee '+e.fee+' ATOM':''}</div></div><div class="amt">−${e.amount} ATL</div></div>`;
+  }).join('') : '<p class="small muted">Noch keine Transaktionen.</p>';
 }
-async function decryptPayload(blobStr, pw){
-  const b=JSON.parse(blobStr); const key=await deriveKey(pw, bh(b.salt));
-  const pt=await crypto.subtle.decrypt({name:'AES-GCM', iv:bh(b.iv)}, key, bh(b.ct));
-  return new TextDecoder().decode(pt);
+$('histRefresh').onclick=()=>{ refresh(); toast('Guthaben/Nonce aktualisiert','ok'); };
+
+// ── Konto-Wechsel / -Verwaltung ──────────────────────────────────────────
+function renderAcctPicker(){ $('acctPick').innerHTML = vault.accounts.map((a,i)=>
+    `<option value="${i}">${a.name||('Konto '+(i+1))}</option>`).join('');
+  $('acctPick').value = String(activeIdx()); }
+const activeIdx=()=>Math.min(+(localStorage.getItem(ACTIVE)||0), vault.accounts.length-1);
+function selectAccount(i){ localStorage.setItem(ACTIVE,String(i)); const a=vault.accounts[i];
+  acct=accountFromPayload(a.payload); backupPayload=a.payload;
+  $('addrShort').textContent=shortAddr(acct.address); $('recvAddr').textContent=acct.address;
+  $('backup').textContent = a.payload.includes(' ')?a.payload:('Secret: '+a.payload);
+  $('sidx').value='0'; renderHist(); refresh();
 }
+$('acctPick').onchange=()=>selectAccount(+$('acctPick').value);
+$('addAcctBtn').onclick=()=>{ // zurück zum Setup, aber Vault behalten
+  show('app',false); show('setupCard'); resetSetup(); toast('Neues Konto: erzeugen oder importieren'); };
+$('renameBtn').onclick=async()=>{ const n=prompt('Neuer Name:', vault.accounts[activeIdx()].name||''); if(n===null) return;
+  vault.accounts[activeIdx()].name=n.trim(); await saveVault(); renderAcctPicker(); toast('Umbenannt','ok'); };
+$('removeBtn').onclick=async()=>{ if(vault.accounts.length<=1) return toast('Letztes Konto kann nicht entfernt werden — nutze „Alles löschen".','err');
+  if(!confirm('Dieses Konto aus der Wallet entfernen? Ohne Backup ist es weg.')) return;
+  vault.accounts.splice(activeIdx(),1); localStorage.setItem(ACTIVE,'0'); await saveVault(); enterApp(); toast('Konto entfernt','ok'); };
 
-// payload → Konto (Mnemonic, wenn Leerzeichen enthalten, sonst Secret-Hex)
-function accountFromPayload(payload){
-  return payload.trim().includes(' ')
-    ? JSON.parse(account_from_mnemonic(payload.trim()))
-    : JSON.parse(account_from_secret(payload.trim()));
-}
-
-function enterWallet(a, payload){
-  acct=a; backupPayload=payload;
-  $('addr').textContent=a.address; $('pub').textContent=a.pubkey;
-  $('backup').textContent = payload.includes(' ') ? payload : ('Secret: '+payload);
-  show('unlockCard',false); show('setupCard',false); show('acctCard');
-  show('balCard'); show('sendCard');
-  log('Konto entsperrt: '+a.address,'ok'); refresh();
-}
-
-// ── Boot: passenden Screen wählen ────────────────────────────────────────
-function boot(){
-  localStorage.removeItem('atlas_secret'); // alte Klartext-Version entfernen
-  if(localStorage.getItem(STORE)) show('unlockCard'); else show('setupCard');
-}
-
-// ── Setup-Tabs ───────────────────────────────────────────────────────────
-$('tabNew').onclick=()=>{ $('tabNew').classList.add('on'); $('tabImp').classList.remove('on');
-  show('panelNew'); show('panelImp',false); show('pwBox',false); pendingPayload=null; };
-$('tabImp').onclick=()=>{ $('tabImp').classList.add('on'); $('tabNew').classList.remove('on');
-  show('panelImp'); show('panelNew',false); show('pwBox'); pendingPayload='import'; };
-
-$('newBtn').onclick=()=>{ try{
-  const g=JSON.parse(generate_mnemonic());
-  $('mnemWords').textContent=g.mnemonic; show('mnemBox'); $('newBtn').classList.add('hide');
-  pendingPayload=g.mnemonic; checkReady();
-}catch(e){log('Fehler: '+e,'err');} };
-$('mnemSaved').onchange=checkReady;
-$('impInput').oninput=()=>{ pendingPayload = $('impInput').value.trim(); };
-function checkReady(){ show('pwBox', !!pendingPayload && (!$('mnemBox').classList.contains('hide') ? $('mnemSaved').checked : true)); }
-
-$('saveBtn').onclick=async()=>{ try{
-  const p = pendingPayload==='import' ? $('impInput').value.trim() : pendingPayload;
-  if(!p) throw new Error('nichts zu speichern');
-  const a = accountFromPayload(p); // validiert Mnemonic/Secret
-  const pw=$('pw1').value; if(pw.length<6) throw new Error('Passwort: mind. 6 Zeichen');
-  if(pw!==$('pw2').value) throw new Error('Passwörter stimmen nicht überein');
-  localStorage.setItem(STORE, await encryptPayload(p, pw));
-  log('Schlüssel verschlüsselt gespeichert.','ok');
-  enterWallet(a, p);
-}catch(e){log('Speichern fehlgeschlagen: '+e,'err');} };
-
-$('unlockBtn').onclick=async()=>{ try{
-  const p = await decryptPayload(localStorage.getItem(STORE), $('unlockPw').value);
-  enterWallet(accountFromPayload(p), p); $('unlockPw').value='';
-}catch(e){ log('Entsperren fehlgeschlagen (falsches Passwort?).','err'); } };
-
-$('lockBtn').onclick=()=>{ acct=null; backupPayload=''; location.reload(); };
-const wipe=()=>{ if(confirm('Konto wirklich löschen? Ohne Backup ist es weg.')){ localStorage.removeItem(STORE); location.reload(); } };
-$('wipeBtn').onclick=wipe; $('removeBtn').onclick=wipe;
-
-// ── Guthaben / Senden ────────────────────────────────────────────────────
-async function refresh(){ if(!acct) return; try{
-  const r=await fetch($('aggUrl').value.replace(/\/$/,'')+'/account/'+acct.address);
-  const j=await r.json();
-  $('bal').textContent=atomToAtl(j.balance); $('balAtom').textContent=j.balance+' ATOM';
-  $('nonce').textContent=j.nonce; log('Guthaben aktualisiert.','ok');
-}catch(e){ log('Guthaben-Abruf fehlgeschlagen (Aggregator läuft? CORS?): '+e,'err'); } }
-$('refreshBtn').onclick=refresh;
+// ── Senden ───────────────────────────────────────────────────────────────
+async function refresh(){ if(!acct) return; try{ const r=await fetch(aggBase()+'/account/'+acct.address); const j=await r.json();
+  $('bal').textContent=atomToAtl(j.balance); $('balAtom').textContent=j.balance+' ATOM · Nonce '+j.nonce;
+  acct._nonce=BigInt(j.nonce); $('netDot').className='dot on';
+}catch(e){ $('netDot').className='dot off'; $('balAtom').textContent='Aggregator nicht erreichbar'; } }
 
 $('sendBtn').onclick=async()=>{ try{
-  const nonce=BigInt($('nonce').textContent.match(/\d+/)?.[0]||'0');
-  const amount=atlToAtom($('amt').value);
-  const txJson=build_submit_tx(acct.secret, $('toAddr').value.trim(), amount, $('fee').value.trim(), nonce);
-  log('Sende '+atomToAtl(amount)+' ATL (nonce '+nonce+') …');
-  const r=await fetch($('aggUrl').value.replace(/\/$/,'')+'/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:txJson});
+  const to=$('toAddr').value.trim().toLowerCase(); if(!/^[0-9a-f]{40}$/.test(to)) throw new Error('Empfänger: 40 Hex');
+  const amount=atlToAtom($('amt').value); const fee=$('fee').value.trim();
+  const nonce=acct._nonce ?? 0n;
+  const txJson=build_submit_tx(acct.secret, to, amount, fee, nonce);
+  toast('Sende '+atomToAtl(amount)+' ATL …');
+  const r=await fetch(aggBase()+'/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:txJson});
   const j=await r.json();
-  if(j.status==='accepted'){ log('✓ angenommen: '+(j.tx_hash||''),'ok'); setTimeout(refresh,1500); }
-  else log('abgelehnt: '+JSON.stringify(j),'err');
-}catch(e){ log('Sende-Fehler: '+e,'err'); } };
+  if(j.status==='accepted'||j.tx_hash){ toast('✓ angenommen','ok');
+    addHist({ts:Date.now(),to,amount:atomToAtl(amount),fee,status:'accepted',hash:j.tx_hash||''});
+    $('amt').value='0'; setTimeout(refresh,1500); }
+  else { toast('abgelehnt: '+(j.error||JSON.stringify(j)),'err'); addHist({ts:Date.now(),to,amount:atomToAtl(amount),fee,status:'rejected'}); }
+}catch(e){ toast('Fehler: '+e.message,'err'); } };
 
 $('forceBtn').onclick=async()=>{ try{
-  const nonce=BigInt($('nonce').textContent.match(/\d+/)?.[0]||'0');
-  const amount=atlToAtom($('amt').value);
-  const p=JSON.parse(build_forced_tx(acct.secret, $('toAddr').value.trim(), amount, $('fee').value.trim(), nonce, BigInt($('sidx').value.trim()||'0')));
-  log('Forced Inclusion an Node …');
-  const r=await fetch($('nodeUrl').value.replace(/\/$/,''),{method:'POST',headers:{'Content-Type':'application/json'},
+  const to=$('toAddr').value.trim().toLowerCase(); if(!/^[0-9a-f]{40}$/.test(to)) throw new Error('Empfänger: 40 Hex');
+  const amount=atlToAtom($('amt').value); const fee=$('fee').value.trim(); const nonce=acct._nonce ?? 0n;
+  const p=JSON.parse(build_forced_tx(acct.secret, to, amount, fee, nonce, BigInt($('sidx').value.trim()||'0')));
+  toast('Forced Inclusion an Node …');
+  const r=await fetch(nodeBase(),{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({jsonrpc:'2.0',id:1,method:'forcel2tx',params:[p]})});
   const j=await r.json();
-  if(j.result) log('✓ forced akzeptiert: '+JSON.stringify(j.result),'ok');
-  else log('forced abgelehnt: '+JSON.stringify(j.error||j),'err');
-}catch(e){ log('Forced-Fehler: '+e,'err'); } };
+  if(j.result){ toast('✓ forced akzeptiert','ok'); addHist({ts:Date.now(),to,amount:atomToAtl(amount),fee,status:'forced'}); setTimeout(refresh,1500); }
+  else toast('forced abgelehnt: '+JSON.stringify(j.error||j),'err');
+}catch(e){ toast('Forced-Fehler: '+e.message,'err'); } };
+
+// ── Tabs ─────────────────────────────────────────────────────────────────
+function switchTab(name){ document.querySelectorAll('.tabs [data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===name));
+  ['send','recv','hist','set'].forEach(t=>show('pane-'+t, t===name)); }
+document.querySelectorAll('.tabs [data-tab]').forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
+
+// ── Setup-Flow ───────────────────────────────────────────────────────────
+let pendingPayload=null;
+function resetSetup(){ pendingPayload=null; show('mnemBox',false); show('panelNew'); show('panelImp',false); show('pwBox',false);
+  $('newBtn').classList.remove('hide'); $('mnemSaved').checked=false; $('impInput').value=''; $('pw1').value=''; $('pw2').value=''; $('acctName').value='';
+  $('tabNew').classList.add('on'); $('tabImp').classList.remove('on'); }
+$('tabNew').onclick=()=>{ resetSetup(); };
+$('tabImp').onclick=()=>{ resetSetup(); $('tabImp').classList.add('on'); $('tabNew').classList.remove('on'); show('panelNew',false); show('panelImp'); show('pwBox'); pendingPayload='import'; };
+$('newBtn').onclick=()=>{ try{ const g=JSON.parse(generate_mnemonic());
+  const words=g.mnemonic.split(/\s+/); $('mnemWords').innerHTML=words.map(w=>`<span>${w}</span>`).join('');
+  show('mnemBox'); $('newBtn').classList.add('hide'); pendingPayload=g.mnemonic; checkReady();
+}catch(e){ toast('Fehler: '+e,'err'); } };
+$('mnemSaved').onchange=checkReady;
+$('impInput').oninput=()=>{ pendingPayload=$('impInput').value.trim(); };
+function checkReady(){ const mnemVisible=!$('mnemBox').classList.contains('hide');
+  show('pwBox', !!pendingPayload && (mnemVisible? $('mnemSaved').checked : true)); }
+
+$('saveBtn').onclick=async()=>{ try{
+  const payload = pendingPayload==='import' ? $('impInput').value.trim() : pendingPayload;
+  if(!payload) throw new Error('nichts zu speichern');
+  const a=accountFromPayload(payload); // validiert
+  const name=$('acctName').value.trim();
+  if(vault){ // weiteres Konto zum bestehenden Vault
+    if(vault.accounts.some(x=>accountFromPayload(x.payload).address===a.address)) throw new Error('Konto bereits vorhanden');
+    vault.accounts.push({name,payload}); await saveVault();
+    localStorage.setItem(ACTIVE, String(vault.accounts.length-1)); toast('Konto hinzugefügt','ok'); enterApp();
+  } else { // erstes Konto: Passwort setzen
+    const p=$('pw1').value; if(p.length<6) throw new Error('Passwort: mind. 6 Zeichen');
+    if(p!==$('pw2').value) throw new Error('Passwörter stimmen nicht überein');
+    pw=p; vault={accounts:[{name,payload}]}; await saveVault(); localStorage.setItem(ACTIVE,'0');
+    toast('Wallet erstellt & verschlüsselt','ok'); enterApp();
+  }
+}catch(e){ toast('Fehlgeschlagen: '+e.message,'err'); } };
+
+// ── Unlock / Lock / Wipe ─────────────────────────────────────────────────
+$('unlockBtn').onclick=async()=>{ try{
+  const raw=await decryptStr(localStorage.getItem(VAULT), $('unlockPw').value);
+  pw=$('unlockPw').value; vault=JSON.parse(raw); $('unlockPw').value=''; enterApp();
+}catch(e){ toast('Entsperren fehlgeschlagen (falsches Passwort?)','err'); } };
+$('lockBtn').onclick=()=>{ pw=null; vault=null; acct=null; location.reload(); };
+const wipe=()=>{ if(confirm('Wallet komplett löschen? Ohne Backup sind alle Konten weg.')){
+  [VAULT,ACTIVE].forEach(k=>localStorage.removeItem(k)); location.reload(); } };
+$('wipeBtn').onclick=wipe;
+
+// ── Diverse UI-Hooks ─────────────────────────────────────────────────────
+$('addrChip').onclick=()=>copy(acct.address,'Adresse kopiert');
+$('copyAddrBtn').onclick=()=>copy(acct.address,'Adresse kopiert');
+$('copyPubBtn').onclick=()=>copy(acct.pubkey,'Public Key kopiert');
+
+function enterApp(){ show('unlockCard',false); show('setupCard',false); show('app');
+  renderAcctPicker(); selectAccount(activeIdx()); renderAB(); switchTab('send'); }
+
+// ── Boot ─────────────────────────────────────────────────────────────────
+function boot(){ loadNet(); renderAB();
+  if(localStorage.getItem(VAULT)) show('unlockCard');
+  else { show('setupCard'); resetSetup(); } }
 
 await init();
-log('WASM geladen. ✓');
 boot();
 </script>
 </body>
