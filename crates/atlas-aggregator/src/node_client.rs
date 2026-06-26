@@ -16,6 +16,19 @@ pub struct NodeClient {
 }
 
 /// Eintrag der Forced-Inclusion-Queue (von `getforcedqueue`).
+/// Modell A: ein Block aus Sicht der L2-Rekonstruktion — Settlement-Calldata
+/// (Transfers) plus die Coinbase-Emissions-Gutschriften `(L2-Adresse, Betrag)`.
+#[derive(Clone, Debug)]
+pub struct L2BlockData {
+    pub height:         u64,
+    /// Ob der Block ein Settlement enthält (maßgeblich für die Ausschüttung der
+    /// aufgelaufenen Emission). Ein Heartbeat-Settlement hat leere `calldata`, ist
+    /// aber ein Settlement → darf NICHT als leerer Block behandelt werden.
+    pub has_settlement: bool,
+    pub calldata:       Vec<u8>,
+    pub credits:        Vec<([u8; 20], u128)>,
+}
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)] // seen_height/due sind informative API-Felder
 pub struct ForcedEntryInfo {
@@ -196,12 +209,14 @@ impl NodeClient {
         self.call("getbatchinfo", json!([])).await
     }
 
-    /// Holt einen Data-Availability-Snapshot für den Aggregator-Resync:
-    /// `(height, l2_state_root, calldata)` — die L2-Root am Tip und die
-    /// konkatenierte Settlement-Calldata der Blöcke `> from_height`.
-    /// `from_height = 0` ⇒ Genesis→Tip (Full-Replay); `from_height >= Tip`
-    /// ⇒ leere Calldata (billiger Head-Check für Root+Höhe).
-    pub async fn get_l2_snapshot(&self, from_height: u64) -> anyhow::Result<(u64, [u8; 32], Vec<u8>)> {
+    /// Holt einen Data-Availability-Snapshot für den Aggregator-Resync/-Follow:
+    /// die Tip-Höhe, die Tip-L2-Root und die GEORDNETE Liste der Blöcke
+    /// `> from_height`, je mit Settlement-Calldata UND Coinbase-Emissions-
+    /// Gutschriften (Modell A). Der Aggregator wendet je Block erst die Calldata
+    /// (Transfers) und dann die Credits (Emission) an und schreibt so seine
+    /// L2-Root exakt wie der Node fort. `from_height >= Tip` ⇒ leere Block-Liste
+    /// (billiger Head-Check für Root+Höhe).
+    pub async fn get_l2_snapshot(&self, from_height: u64) -> anyhow::Result<(u64, [u8; 32], Vec<L2BlockData>)> {
         let result = self.call("getl2snapshot", json!([from_height])).await?;
         let height = result["height"].as_u64()
             .ok_or_else(|| anyhow::anyhow!("getl2snapshot: height fehlt"))?;
@@ -210,8 +225,22 @@ impl NodeClient {
                     .ok_or_else(|| anyhow::anyhow!("getl2snapshot: l2_state_root fehlt"))?)?
             .as_slice().try_into()
             .map_err(|_| anyhow::anyhow!("getl2snapshot: l2_state_root keine 32 Byte"))?;
-        let calldata = hex::decode(result["calldata"].as_str().unwrap_or(""))?;
-        Ok((height, root, calldata))
+        let mut blocks = Vec::new();
+        for b in result["blocks"].as_array().cloned().unwrap_or_default() {
+            let bh = b["height"].as_u64().unwrap_or(0);
+            let calldata = hex::decode(b["calldata"].as_str().unwrap_or(""))?;
+            let mut credits = Vec::new();
+            for c in b["credits"].as_array().cloned().unwrap_or_default() {
+                let addr: [u8; 20] = hex::decode(c["addr"].as_str().unwrap_or(""))?
+                    .as_slice().try_into()
+                    .map_err(|_| anyhow::anyhow!("getl2snapshot: credit addr keine 20 Byte"))?;
+                let amount: u128 = c["amount"].as_str().unwrap_or("0").parse().unwrap_or(0);
+                credits.push((addr, amount));
+            }
+            let has_settlement = b["has_settlement"].as_bool().unwrap_or(!calldata.is_empty());
+            blocks.push(L2BlockData { height: bh, has_settlement, calldata, credits });
+        }
+        Ok((height, root, blocks))
     }
 
     /// Prüft ob der Node erreichbar ist

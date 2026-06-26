@@ -379,20 +379,27 @@ impl Transaction {
         tx
     }
 
-    /// Erstellt eine Coinbase-Transaktion
+    /// Erstellt eine Coinbase-Transaktion (Modell A).
+    ///
+    /// Es gibt **keinen L1-Coin**: die Coinbase-Outputs tragen Wert **0** und
+    /// dienen nur als Träger der **L2-Adressen** von Miner/Prover. Der Node
+    /// schreibt die Emission (Subsidy + L2-Fees, 70/30) nativ deren L2-Konten gut;
+    /// die Beträge rechnet er aus dem Schedule nach (nicht aus der Coinbase →
+    /// kein Inflations-Hebel). `_miner_reward`/`_prover_reward` bleiben in der
+    /// Signatur (Aufrufer-Kompatibilität), beeinflussen die L1-Outputs aber nicht.
     pub fn new_coinbase(
-        height:        u64,
-        miner_reward:  Amount,
-        prover_reward: Amount,
-        miner_addr:    Address,
-        prover_addr:   Address,
+        height:         u64,
+        _miner_reward:  Amount,
+        _prover_reward: Amount,
+        miner_addr:     Address,
+        prover_addr:    Address,
     ) -> Self {
         let mut outputs = vec![
-            TxOutput { value: miner_reward,  address: OutputAddress::Classic(miner_addr) },
+            TxOutput { value: Amount::ZERO, address: OutputAddress::Classic(miner_addr) },
         ];
-        if prover_reward.as_atom() > 0 {
+        if prover_addr != miner_addr {
             outputs.push(TxOutput {
-                value:   prover_reward,
+                value:   Amount::ZERO,
                 address: OutputAddress::Classic(prover_addr),
             });
         }

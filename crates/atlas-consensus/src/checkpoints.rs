@@ -18,7 +18,7 @@ pub struct Checkpoint {
 pub const MAINNET_CHECKPOINTS: &[Checkpoint] = &[
     Checkpoint {
         height: 0,
-        hash: "2e10617270dd94a024d8c80ab3cf7a228a9978c939d7b2594627b99700bfe816",
+        hash: "be3432e688bf52aa62fd47786b31d7664f60e0f7149dc9e555c8dcbd651a25c5",
     },
 ];
 

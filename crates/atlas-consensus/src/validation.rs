@@ -13,7 +13,6 @@ use atlas_core::hash::Hash;
 use atlas_core::transaction::{OutPoint, Transaction};
 use atlas_core::amount::Amount;
 use crate::params::ConsensusParams;
-use crate::reward::RewardSchedule;
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
@@ -148,14 +147,14 @@ impl<'a> BlockValidator<'a> {
             return Err(ValidationError::MultipleCoinbase);
         }
 
-        // Coinbase-Reward darf Maximum nicht überschreiten
-        let schedule        = RewardSchedule::new(self.params);
-        let expected_reward = schedule.block_reward(block.height(), &block.transactions);
-        let coinbase_total  = block.transactions[0].total_output();
-        if coinbase_total > expected_reward.total {
+        // Modell A: Die Coinbase trägt KEINEN L1-Wert — die Emission wird auf L2
+        // gutgeschrieben (vom Node nativ, Betrag aus dem Schedule). Jeder nicht-null
+        // L1-Coinbase-Output würde L1-Geld aus dem Nichts schaffen → ungültig.
+        let coinbase_total = block.transactions[0].total_output();
+        if coinbase_total.as_atom() != 0 {
             return Err(ValidationError::CoinbaseOverpay {
                 reward:      coinbase_total,
-                max_allowed: expected_reward.total,
+                max_allowed: Amount::ZERO,
             });
         }
 
@@ -335,8 +334,10 @@ mod tests {
         let genesis   = Block::genesis();
         let miner     = Address([1u8; 20]);
         let prover    = Address([2u8; 20]);
-        // Coinbase zahlt 1000 ATL, erlaubt wäre 64 ATL
-        let coinbase = Transaction::new_coinbase(1, Amount::from_atl(999), Amount::from_atl(1), miner, prover);
+        // Modell A: Coinbase trägt keinen L1-Wert. Wir injizieren einen L1-Output
+        // (1000 ATL) — das muss als ungültig (CoinbaseOverpay, erlaubt = 0) gelten.
+        let mut coinbase = Transaction::new_coinbase(1, Amount::ZERO, Amount::ZERO, miner, prover);
+        coinbase.outputs[0].value = Amount::from_atl(1000);
         let mut next = Block {
             header:       genesis.header.clone(),
             transactions: vec![coinbase],

@@ -112,6 +112,30 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Modell A: Live-Follower starten — verfolgt die Chain blockweise und hält den
+    // bestätigten L2-Zustand (Settlements + Coinbase-Gutschriften) synchron, sodass
+    // die Aggregator-Root stets der Node-Tip-Root entspricht (sonst prallen
+    // Settlements ab, weil die Root pro Block durch die Emission vorrückt).
+    {
+        let agg_follow = agg.clone();
+        tokio::spawn(async move { agg_follow.follow_chain().await; });
+        info!("Modell-A-Follower gestartet (verfolgt Coinbase-/Settlement-Übergänge).");
+    }
+
+    // Modell A — Heartbeat: schüttet aufgelaufene Coinbase-Emission per leerem
+    // Settlement aus, wenn kein User-Verkehr fließt (Fair-Launch-Bootstrap).
+    {
+        let agg_hb = agg.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(20));
+            loop {
+                interval.tick().await;
+                agg_hb.maybe_heartbeat().await;
+            }
+        });
+        info!("Modell-A-Heartbeat gestartet (Emissions-Ausschüttung bei Leerlauf).");
+    }
+
     // HTTP-Server starten
     let server = AggregatorServer::new(agg.clone());
     let bind   = format!("0.0.0.0:{}", config.listen_port);

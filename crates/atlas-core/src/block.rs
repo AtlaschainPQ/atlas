@@ -40,18 +40,18 @@ pub const EMPTY_L2_ROOT: [u8; 32] = [
     0x4f, 0x3a, 0x5f, 0xd2, 0x41, 0x5c, 0xe3, 0x26,
 ];
 
-/// Kanonische geförderte Genesis-L2-State-Root (Dev-/Testnet-Allokation).
-/// Da ATLAS keine Bridge/Mint besitzt, ist die Genesis-Allokation der einzige
-/// Förderpfad — der Genesis-Block verankert deshalb NICHT den leeren Baum,
-/// sondern den vorab geförderten Zustand. Muss mit
-/// `atlas_zk::genesis_l2_state_root()` übereinstimmen — abgesichert durch den
-/// Cross-Check-Test in atlas-node. Generiert via
-/// `cargo run -p atlas-zk --release --bin genesis_root`.
+/// Kanonische Genesis-L2-State-Root. **Fair Launch (kein Premine):** die
+/// Genesis-Allokation (`genesis/alloc.json`) ist LEER → die gesamte Geldmenge
+/// entsteht ausschließlich durch die PoW-Emission (Modell A, auf L2-Konten
+/// gutgeschrieben). Der Genesis-Block verankert daher den LEEREN Baum
+/// (== `EMPTY_L2_ROOT`). Muss mit `atlas_zk::genesis_l2_state_root()`
+/// übereinstimmen — abgesichert durch den Cross-Check-Test in atlas-node.
+/// Generiert via `cargo run -p atlas-zk --release --bin genesis_root`.
 pub const GENESIS_L2_ROOT: [u8; 32] = [
-    0xcf, 0xa7, 0x28, 0x30, 0x4f, 0x98, 0xc9, 0xe6,
-    0x1a, 0x96, 0x13, 0x7c, 0x7f, 0xb1, 0xbc, 0x48,
-    0xca, 0x02, 0x83, 0x38, 0x9b, 0xb7, 0xbf, 0xda,
-    0x8e, 0xf1, 0xdc, 0x57, 0x4b, 0x90, 0x01, 0x0d,
+    0x7e, 0x93, 0x32, 0x80, 0xbc, 0x78, 0x81, 0x8c,
+    0xff, 0xa1, 0x6c, 0x85, 0xe3, 0xdc, 0xbc, 0x10,
+    0xcd, 0x70, 0xa0, 0xda, 0x76, 0xe7, 0xd0, 0xa9,
+    0x4f, 0x3a, 0x5f, 0xd2, 0x41, 0x5c, 0xe3, 0x26,
 ];
 
 fn l2_genesis_root() -> Hash { Hash(GENESIS_L2_ROOT) }

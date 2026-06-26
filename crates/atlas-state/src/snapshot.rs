@@ -25,6 +25,10 @@ pub struct StateSnapshot {
     pub current_bits:    u32,
     /// L2-State-Root NACH diesem Block (für Reorg-Rollback der L2-Kette)
     pub l2_state_root:   Hash,
+    /// Modell A: kompakter Snapshot des vollen L2-AccountTree VOR diesem Block
+    /// (`L2State::to_snapshot_bytes`) — für Reorg-Rollback des node-gehaltenen
+    /// Baums. Leer, wenn der Node keinen L2-Baum führt (z. B. test_mode).
+    pub l2_state_bytes:  Vec<u8>,
     /// Forced-Inclusion-Queue NACH diesem Block (für Reorg-Rollback)
     pub forced_queue:    Vec<atlas_core::transaction::ForcedQueueEntry>,
 }

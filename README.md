@@ -87,23 +87,24 @@ ATOM ermöglicht extrem niedrige Gebühren selbst bei hohem ATL-Preis (< 0,001 �
 ## Geldpolitik
 
 ATLAS hat **eine** Geldmenge, und sie lebt auf der **L2** (kontobasiert). Sie speist
-sich aus zwei Quellen, **beide direkt auf L2-Konten** gutgeschrieben:
-die **Genesis-Allokation** (Anfangsverteilung) und die **PoW-Block-Emission**.
+sich aus der **PoW-Block-Emission** (direkt auf L2-Konten gutgeschrieben) und
+optional einer **Genesis-Allokation**. Standard ist ein **Fair Launch ohne Premine**.
 
 | Parameter          | Wert                                  |
 |--------------------|---------------------------------------|
-| Anfangsverteilung  | Genesis-Allokation (L2-Konten)        |
+| Anfangsverteilung  | leer (Fair Launch) oder `alloc.json`  |
 | Start-Reward       | 200 ATL / Block                       |
 | Halving-Intervall  | 250 000 Blöcke (~4,75 Jahre), max. 32 |
 | Blockzeit (Ziel)   | ~10 Minuten (Mainnet)                 |
 | Emissions-Cap      | +100 000 000 ATL (gesamtes Mining)    |
-| Gesamtmenge        | Genesis-Allokation + ≤ 100 Mio ATL    |
+| Gesamtmenge        | Genesis-Allokation (ggf. 0) + ≤ 100 Mio ATL |
 
-> **Modell A:** Die PoW-Emission wird **direkt den L2-Konten** von Miner/Prover
-> gutgeschrieben — es gibt **keinen separaten L1-Coin** und **keine Bridge**; die
-> L1 ist reine PoW-Sicherheits-/Settlement-Schicht. *(Status: als einheitliche
-> Geldpolitik beschlossen; Code-Umsetzung der L2-Gutschrift in Arbeit — aktuell
-> mintet der Code die Emission noch L1-seitig.)*
+> **Modell A (implementiert):** Die PoW-Emission wird **direkt den L2-Konten** von
+> Miner/Prover gutgeschrieben — **kein separater L1-Coin**, **keine Bridge**; die L1
+> ist reine PoW-Sicherheits-/Settlement-Schicht. Die Gutschrift ist **gebündelt**
+> (an Settlement-Grenzen, damit die Settlement-`pre_root` stabil bleibt); ein
+> Aggregator-**Heartbeat** schüttet die Emission auch bei Leerlauf aus → echter
+> **Fair Launch** ohne Premine möglich.
 
 ### Emissionsplan
 

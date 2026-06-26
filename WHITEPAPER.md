@@ -271,16 +271,20 @@ Die L1 trägt **keinen eigenen Coin** — sie ist reine PoW-Sicherheits-, Settle
 und Datenverfügbarkeits-Schicht. Weil aller Wert auf **einem** Ledger (L2) liegt,
 braucht es bewusst **keine L1↔L2-Bridge**. Wertänderungen auf L2 sind Transfers
 **plus** die deterministische, gedeckelte Emission (≤ 100 Mio ATL); die Gesamtmenge
-ist Genesis-Allokation + Emittiertes.
+ist Genesis-Allokation (ggf. leer) + Emittiertes.
 
-> **Umsetzungsstatus:** Modell A (Emission als L2-Gutschrift) ist die beschlossene,
-> einheitliche Geldpolitik. Die Code-Umsetzung — die Coinbase kreditiert ein
-> L2-Konto, nativ über einen Merkle-Witness gegen die `l2_state_root` verifiziert —
-> ist **in Arbeit**; der aktuelle Code mintet die Emission noch L1-seitig.
+> **Umsetzung (implementiert & live verifiziert):** Der Node führt den vollen
+> L2-Baum mit. Die Coinbase trägt **keinen L1-Wert**; ihre Emission wird beim
+> nächsten Settlement-Block **nativ** den L2-Konten von Miner/Prover gutgeschrieben
+> (Beträge aus dem Schedule → inflations-sicher). Die Gutschrift ist **gebündelt**
+> (leere Blöcke lassen die L2-Root unverändert, die Emission läuft auf), damit die
+> Settlement-`pre_root` zwischen Settlements stabil bleibt. Ein Aggregator-
+> **Heartbeat** reicht bei Leerlauf ein leeres Settlement ein, das die aufgelaufene
+> Emission ausschüttet — so funktioniert auch ein **Fair Launch ohne Premine**.
 
-Die Genesis-Allokation ist die **Anfangsverteilung** des Netzwerks und damit ein
-zentraler Launch-Parameter. Sie ist **dateibasiert** definiert
-(`genesis/alloc.json`: Liste aus `{address, balance}`) und wird per `include_str!`
+Die Genesis-Allokation (`genesis/alloc.json`) ist **konfigurierbar**: **leer = Fair
+Launch** (kein Premine — die gesamte Geldmenge entsteht nur aus der Mining-Emission)
+oder eine Liste `{address, balance}` als Anfangsverteilung. Sie wird per `include_str!`
 in alle Binaries einkompiliert, sodass Node und Aggregator byte-identisch dieselbe
 Geldmenge verankern. Aus der Datei wird die Konstante `GENESIS_L2_ROOT` deterministisch
 abgeleitet; ein Cross-Check-Test erzwingt, dass Datei, Konstante und Genesis-Block

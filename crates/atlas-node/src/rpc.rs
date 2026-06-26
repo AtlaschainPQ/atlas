@@ -689,17 +689,39 @@ impl RpcServer {
                     let chain = self.state.chain.read();
                     (chain.height, chain.l2_state_root)
                 };
-                let mut calldata: Vec<u8> = Vec::new();
+                // Modell A: pro Block GEORDNET {Settlement-Calldata, Coinbase-
+                // Credits}. Der Aggregator spielt je Block erst die Calldata
+                // (Transfers) und dann die Coinbase-Gutschriften (Emission) ab und
+                // schreibt so seine L2-Root exakt wie der Node fort.
+                let mut blocks: Vec<Value> = Vec::new();
                 let mut settlements: u64 = 0;
                 if let Some(store) = self.chain.storage_arc().as_ref() {
                     for h in from_height.saturating_add(1)..=height {
                         if let Ok(Some(block)) = store.load_block_by_height(h) {
+                            let mut cd_all: Vec<u8> = Vec::new();
+                            let mut block_has_settle = false;
                             for tx in &block.transactions {
                                 if let atlas_core::transaction::TxType::SettlementBid { calldata: cd, .. } = &tx.tx_type {
-                                    calldata.extend_from_slice(cd);
+                                    cd_all.extend_from_slice(cd);
+                                    block_has_settle = true;
                                     settlements += 1;
                                 }
                             }
+                            let credits: Vec<Value> = self.chain
+                                .coinbase_credits_of_block(&block)
+                                .into_iter()
+                                .map(|(a, amt)| json!({ "addr": hex::encode(a), "amount": amt.to_string() }))
+                                .collect();
+                            blocks.push(json!({
+                                "height":         h,
+                                // Modell A: ob der Block ein Settlement enthält — maßgeblich
+                                // dafür, ob die aufgelaufene Emission hier ausgeschüttet wird.
+                                // Ein Heartbeat-Settlement hat LEERE Calldata, ist aber ein
+                                // Settlement → darf NICHT als leerer Block gelten.
+                                "has_settlement": block_has_settle,
+                                "calldata":       hex::encode(&cd_all),
+                                "credits":        credits,
+                            }));
                         }
                     }
                 }
@@ -708,7 +730,7 @@ impl RpcServer {
                     "from_height":   from_height,
                     "l2_state_root": l2_root.as_hex(),
                     "settlements":   settlements,
-                    "calldata":      hex::encode(&calldata),
+                    "blocks":        blocks,
                 }))
             }
 

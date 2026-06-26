@@ -87,6 +87,12 @@ pub struct ChainManager {
     prover_subprocess: bool,
     /// Serialisiert die gesamte Block-Verarbeitung — verhindert Race Conditions bei Reorgs
     process_lock: parking_lot::Mutex<()>,
+    /// Modell A: Der Node führt den vollen L2-AccountTree mit (nicht nur die Root).
+    /// Er wird in `apply_block` fortgeschrieben — Settlement-Calldata UND die
+    /// Coinbase-Emissions-Gutschrift an Miner/Prover-L2-Konten — sodass die
+    /// `l2_state_root` pro Block korrekt herauskommt. Für Reorgs wird sein
+    /// kompakter Snapshot (`to_snapshot_bytes`) im `StateSnapshot` mitgesichert.
+    l2_state: parking_lot::RwLock<atlas_zk::l2_state::L2State>,
 }
 
 impl ChainManager {
@@ -108,6 +114,10 @@ impl ChainManager {
             prover:       None,
             prover_subprocess: false,
             process_lock: parking_lot::Mutex::new(()),
+            // Genesis-geförderter L2-Zustand — Root == GENESIS_L2_ROOT.
+            l2_state: parking_lot::RwLock::new(
+                atlas_zk::l2_state::L2State::from_genesis(&atlas_zk::genesis_allocation()),
+            ),
         }
     }
 
@@ -529,8 +539,38 @@ impl ChainManager {
         // nehmen nur die maximale Präfix-Menge auf, die lückenlos an die aktuelle
         // L2-State-Root anschließt, und schreiben die Root fort.
         let prev_l2_root = self.state.chain.read().l2_state_root;
-        let (all_txs, proof_root, l2_state_root, batch_count) =
+        let (all_txs, proof_root, post_settle_root, batch_count) =
             self.assemble_l2_template(prev_l2_root, all_txs, height);
+
+        // Modell A: finale Header-L2-Root = post-settlement-Root + Coinbase-
+        // Emissions-Gutschrift (Subsidy+Fees an Miner/Prover-L2-Konten). Der Node
+        // rechnet exakt dasselbe nach (apply_block). Im test_mode keine L2-Gutschrift.
+        let l2_state_root = if self.test_mode {
+            post_settle_root
+        } else {
+            let settlements = Self::extract_settlements(&all_txs);
+            if settlements.is_empty() {
+                // Modell A (gebündelt): leerer Block lässt die L2-Root unverändert.
+                prev_l2_root
+            } else {
+                let mut tree = self.l2_state.read().clone();
+                let ok = (|| -> Result<Hash, ()> {
+                    for s in &settlements {
+                        let inputs = atlas_zk::l2_state::decode_calldata(&s.calldata).map_err(|_| ())?;
+                        tree.apply_calldata(&inputs).map_err(|_| ())?;
+                    }
+                    // Aufgelaufene Coinbase-Emission (dieser Block + vorausgehende
+                    // leere Blöcke) nativ gutschreiben — wie der Node in apply_block.
+                    for (addr, amt) in self.pending_coinbase_credits(height, &all_txs) {
+                        if amt > 0 { tree.credit(&addr, amt); }
+                    }
+                    Ok(Hash(tree.root_bytes()))
+                })();
+                // Bei Fehler post_settle_root — der Node lehnt den Block dann ab;
+                // der Miner verschwendet höchstens Arbeit, kein Konsens-Schaden.
+                ok.unwrap_or(post_settle_root)
+            }
+        };
 
         let merkle_root = {
             let hashes: Vec<Hash> = all_txs.iter().map(|tx| tx.txid()).collect();
@@ -561,34 +601,99 @@ impl ChainManager {
     // ── Block verarbeitung ────────────────────────────────────────────────────
 
     /// Validierter Block auf die Kette anwenden (State-Transition + Chain-Update)
+    /// Modell A: Emissions-Gutschrift eines Blocks = Subsidy (aus dem Schedule)
+    /// + Summe der L2-Settlement-Fees, gesplittet 70/30 Miner/Prover. Die Beträge
+    /// werden hier NACHGERECHNET (nicht aus der Coinbase übernommen) → Inflations-
+    /// Schutz. Rückgabe: (miner_atom, prover_atom, subsidy_atom).
+    fn coinbase_l2_credit(&self, height: u64, settlements: &[Settlement]) -> (u128, u128, u128) {
+        let schedule = RewardSchedule::new(&self.params);
+        let subsidy  = schedule.subsidy_at(height).as_atom();
+        let fees: u128 = settlements.iter().map(|s| s.total_fees).sum();
+        let (m, p) = self.params.split_reward(
+            atlas_core::amount::Amount::from_atom(subsidy + fees));
+        (m.as_atom(), p.as_atom(), subsidy)
+    }
+
+    /// Modell A: Die Coinbase-Emissions-Gutschriften eines Blocks als
+    /// `(L2-Adresse, Betrag)`-Liste — Adressen aus der Coinbase, Beträge aus dem
+    /// Schedule nachgerechnet. Für den Aggregator-Resync/-Follow (DA), damit er
+    /// die L2-Root pro Block exakt wie der Node fortschreibt.
+    pub(crate) fn coinbase_credits_of_block(&self, block: &Block) -> Vec<([u8; 20], u128)> {
+        self.coinbase_credits_from(block.header.height, &block.transactions)
+    }
+
+    /// Wie `coinbase_credits_of_block`, aber aus `(height, txs)` — auch für das
+    /// noch im Bau befindliche Miner-Template nutzbar.
+    fn coinbase_credits_from(
+        &self,
+        height: u64,
+        txs: &[atlas_core::transaction::Transaction],
+    ) -> Vec<([u8; 20], u128)> {
+        use atlas_core::transaction::OutputAddress;
+        let settlements = Self::extract_settlements(txs);
+        let (m, p, _) = self.coinbase_l2_credit(height, &settlements);
+        let Some(cb) = txs.first() else { return Vec::new(); };
+        let addr_of = |o: &atlas_core::transaction::TxOutput| -> Option<[u8; 20]> {
+            match &o.address { OutputAddress::Classic(a) => Some(a.0), _ => None }
+        };
+        match cb.outputs.len() {
+            0 => Vec::new(),
+            1 => addr_of(&cb.outputs[0]).map(|a| vec![(a, m + p)]).unwrap_or_default(),
+            _ => {
+                let mut v = Vec::new();
+                if let Some(a) = addr_of(&cb.outputs[0]) { v.push((a, m)); }
+                if p > 0 { if let Some(a) = addr_of(&cb.outputs[1]) { v.push((a, p)); } }
+                v
+            }
+        }
+    }
+
+    /// Modell A (gebündelt): die beim aktuellen Settlement-Block fälligen
+    /// Coinbase-Gutschriften = der Block selbst PLUS alle vorausgehenden LEEREN
+    /// Blöcke seit dem letzten Settlement (deren Emission lief auf). Der Walk-Back
+    /// nutzt den Storage; Credits sind additiv (Reihenfolge egal).
+    fn pending_coinbase_credits(
+        &self,
+        height: u64,
+        txs: &[atlas_core::transaction::Transaction],
+    ) -> Vec<([u8; 20], u128)> {
+        let mut credits = self.coinbase_credits_from(height, txs);
+        if let Some(store) = self.storage.as_ref() {
+            let mut h = height;
+            while h > 1 {
+                h -= 1;
+                match store.load_block_by_height(h) {
+                    Ok(Some(b)) => {
+                        if !Self::extract_settlements(&b.transactions).is_empty() {
+                            break; // letztes Settlement erreicht — Stop
+                        }
+                        credits.extend(self.coinbase_credits_of_block(&b));
+                    }
+                    _ => break,
+                }
+            }
+        }
+        credits
+    }
+
     fn apply_block(&self, block: Block, hash: Hash, height: u64) -> Result<(), ChainError> {
         // L2-State-Transition: soundness-tragende Verifikation der SettlementBids.
         // Jeder Bid trägt seinen eigenen Groth16-State-Transition-Beweis; die
         // L2-State-Root-Kette wird strikt gegen den aktuellen Chain-Zustand geprüft.
         let prev_l2_root = self.state.chain.read().l2_state_root;
         let settlements  = Self::extract_settlements(&block.transactions);
-        let new_l2_root = if settlements.is_empty() {
-            // Blöcke ohne Settlements müssen die L2-Root unverändert fortführen.
-            if block.header.l2_state_root != prev_l2_root {
-                return Err(ChainError::Validation(ValidationError::ZkProofInvalid(
-                    "block without settlements must keep L2 state root unchanged".to_string(),
-                )));
-            }
+        // 1. Settlement-Proof-Kette validieren (proof_root + je-Bid-Beweise + DA)
+        //    → Root NACH den Settlements. Im Modell A ist das eine ZWISCHEN-Root;
+        //    der Header trägt die Root NACH der zusätzlichen Coinbase-Gutschrift.
+        let post_settle_root = if settlements.is_empty() {
             prev_l2_root
         } else {
-            // 1. L2-Root-Kette validieren + proof_root nachrechnen (immer, billig).
-            let (proof_root, new_root) = Self::validate_l2_chain(&prev_l2_root, &settlements)?;
+            let (proof_root, r) = Self::validate_l2_chain(&prev_l2_root, &settlements)?;
             if block.header.proof_root != proof_root {
                 return Err(ChainError::Validation(ValidationError::ZkProofInvalid(
                     "proof_root does not match recomputed settlement digest".to_string(),
                 )));
             }
-            if block.header.l2_state_root != new_root {
-                return Err(ChainError::Validation(ValidationError::ZkProofInvalid(
-                    "header l2_state_root does not match settlement chain".to_string(),
-                )));
-            }
-            // 2. Jeden State-Transition-Beweis verifizieren (außer test_mode).
             let zk = ZkVerifier::new(self.test_mode);
             for s in &settlements {
                 zk.verify_state_bid(
@@ -596,19 +701,75 @@ impl ChainManager {
                 ).map_err(|e| ChainError::Validation(
                     ValidationError::ZkProofInvalid(e.to_string()),
                 ))?;
-                // 2b. Data Availability: die On-Chain-Calldata MUSS zum im Beweis
-                // gebundenen batch_commitment hashen. Damit ist garantiert, dass die
-                // veröffentlichten L2-Daten exakt der bewiesenen Transition entsprechen
-                // und der L2-Zustand von Genesis re-konstruierbar bleibt (Escape-Hatch).
                 if !self.test_mode {
                     Self::verify_data_availability(s).map_err(|e| ChainError::Validation(
                         ValidationError::ZkProofInvalid(e),
                     ))?;
                 }
             }
-            info!("ZK: {} state-transition proof(s) verified for block {} (L2 root → {})",
-                settlements.len(), height, &new_root.as_hex()[..16]);
-            new_root
+            info!("ZK: {} state-transition proof(s) verified for block {} (settle root → {})",
+                settlements.len(), height, &r.as_hex()[..16]);
+            r
+        };
+
+        // 2. Modell A: vollen L2-Baum bauen = Settlements + Coinbase-Emissions-
+        //    Gutschrift (Subsidy+Fees, Beträge aus dem Schedule nachgerechnet) und
+        //    gegen den Header prüfen. Die L2-Root rückt damit pro Block vor. Im
+        //    test_mode (Dummy-Calldata) gilt die alte Semantik: Header ==
+        //    Settlement-Root, keine L2-Gutschrift.
+        let (new_l2_tree, emission_subsidy) = if self.test_mode {
+            if block.header.l2_state_root != post_settle_root {
+                return Err(ChainError::Validation(ValidationError::ZkProofInvalid(
+                    "header l2_state_root does not match settlement chain".to_string(),
+                )));
+            }
+            (None, RewardSchedule::new(&self.params).subsidy_at(height).as_atom())
+        } else {
+            let subsidy = RewardSchedule::new(&self.params).subsidy_at(height).as_atom();
+            let mut tree = self.l2_state.read().clone();
+            if tree.root_bytes() != prev_l2_root.0 {
+                return Err(ChainError::Validation(ValidationError::ZkProofInvalid(
+                    "node L2 tree out of sync with chain l2_state_root".to_string(),
+                )));
+            }
+            if settlements.is_empty() {
+                // Modell A (gebündelt): ein Block OHNE Settlement lässt die L2-Root
+                // UNVERÄNDERT. Die Emission läuft auf und wird beim nächsten
+                // Settlement-Block nativ nachgetragen — so bleibt die Settlement-
+                // `pre_root` zwischen Settlements STABIL (keine Coinbase-Race).
+                if block.header.l2_state_root != prev_l2_root {
+                    return Err(ChainError::Validation(ValidationError::ZkProofInvalid(
+                        "block without settlements must keep L2 state root unchanged (batched coinbase)".to_string(),
+                    )));
+                }
+                (None, subsidy)
+            } else {
+                // Transfers (bewiesen) anwenden → Settlement-Root.
+                for s in &settlements {
+                    let inputs = atlas_zk::l2_state::decode_calldata(&s.calldata)
+                        .map_err(|e| ChainError::Validation(ValidationError::ZkProofInvalid(
+                            format!("L2 calldata decode: {}", e))))?;
+                    tree.apply_calldata(&inputs).map_err(|e| ChainError::Validation(
+                        ValidationError::ZkProofInvalid(format!("L2 calldata apply: {:?}", e))))?;
+                }
+                if tree.root_bytes() != post_settle_root.0 {
+                    return Err(ChainError::Validation(ValidationError::ZkProofInvalid(
+                        "node L2 tree root != settlement chain root".to_string(),
+                    )));
+                }
+                // Aufgelaufene Coinbase-Emission nativ gutschreiben: dieser
+                // Settlement-Block + alle vorausgehenden LEEREN Blöcke seit dem
+                // letzten Settlement (Credits sind additiv → kommutieren).
+                for (addr, amt) in self.pending_coinbase_credits(block.header.height, &block.transactions) {
+                    if amt > 0 { tree.credit(&addr, amt); }
+                }
+                if tree.root_bytes() != block.header.l2_state_root.0 {
+                    return Err(ChainError::Validation(ValidationError::ZkProofInvalid(
+                        "node L2 tree root != header l2_state_root (Modell A gebündelt)".to_string(),
+                    )));
+                }
+                (Some(tree), subsidy)
+            }
         };
 
         // Forced-Inclusion-Konsensregeln: Queue fortschreiben (Discharge durch
@@ -640,6 +801,7 @@ impl ChainManager {
                 security_delay: chain.security_delay,
                 current_bits:  chain.current_bits,
                 l2_state_root: chain.l2_state_root,
+                l2_state_bytes: self.l2_state.read().to_snapshot_bytes(),
                 forced_queue:  chain.forced_queue.clone(),
             }
         };
@@ -656,13 +818,13 @@ impl ChainManager {
             let mut chain = self.state.chain.write();
             chain.height    = height;
             chain.best_hash = hash;
-            chain.l2_state_root = new_l2_root;
+            chain.l2_state_root = block.header.l2_state_root;
             chain.forced_queue  = new_forced_queue;
 
-            let coinbase_issued = block.transactions.first()
-                .map(|cb| cb.total_output())
-                .unwrap_or(atlas_core::amount::Amount::ZERO);
-            chain.total_supply += coinbase_issued;
+            // Modell A: Die Emission (Subsidy) ist auf L2 gutgeschrieben worden;
+            // total_supply zählt die echte Neuemission (Fees = Umverteilung
+            // Sender→Miner, keine neue Geldmenge).
+            chain.total_supply += atlas_core::amount::Amount::from_atom(emission_subsidy);
             chain.total_txs    += result.tx_count as u64;
             chain.update_fees(result.total_fees);
             chain.add_header(block.header.clone());
@@ -689,6 +851,13 @@ impl ChainManager {
                     );
                 }
             }
+        }
+
+        // Modell A: den fortgeschriebenen L2-Baum übernehmen (Commit nach
+        // erfolgreicher Block-Anwendung). prev_l2_root == self.l2_state vorher
+        // wurde oben geprüft; Root-Match gegen new_l2_root ebenfalls.
+        if let Some(tree) = new_l2_tree {
+            *self.l2_state.write() = tree;
         }
 
         // Snapshot speichern
@@ -802,6 +971,7 @@ impl ChainManager {
         let pre_reorg_utxos      = self.state.utxo_set.snapshot();
         let pre_reorg_chain      = self.state.chain.read().clone();
         let pre_reorg_snap_count = self.snapshots.read().len();
+        let pre_reorg_l2         = self.l2_state.read().to_snapshot_bytes();
 
         // ── Rollback zum Fork-Punkt ──────────────────────────────────────────
         // Schneller Pfad: In-Memory-Snapshot am Fork-Punkt. Fehlt er (Snapshots
@@ -813,13 +983,20 @@ impl ChainManager {
             mgr.get_at_height(fork_at_height + 1).map(|s| {
                 (s.utxos.clone(), s.total_supply, s.total_txs,
                  s.total_fees, s.avg_fees, s.security_delay, s.current_bits,
-                 s.l2_state_root, s.forced_queue.clone())
+                 s.l2_state_root, s.l2_state_bytes.clone(), s.forced_queue.clone())
             })
         };
 
         match snap {
-            Some((utxo_snap, t_supply, t_txs, t_fees, avg_fees, sec_delay, bits, l2_root, forced_q)) => {
+            Some((utxo_snap, t_supply, t_txs, t_fees, avg_fees, sec_delay, bits, l2_root, l2_bytes, forced_q)) => {
                 self.state.utxo_set.restore(utxo_snap);
+                // Modell A: node-gehaltenen L2-Baum aus dem Snapshot wiederherstellen
+                // (vor dem Chain-Lock, um nicht zwei Write-Locks zu halten).
+                if !l2_bytes.is_empty() {
+                    if let Some(st) = atlas_zk::l2_state::L2State::from_snapshot_bytes(&l2_bytes) {
+                        *self.l2_state.write() = st;
+                    }
+                }
                 let mut chain = self.state.chain.write();
                 chain.height         = fork_at_height;
                 chain.total_supply   = t_supply;
@@ -845,6 +1022,9 @@ impl ChainManager {
                     // Rekonstruktion fehlgeschlagen → Originalkette wiederherstellen.
                     self.state.utxo_set.restore(pre_reorg_utxos);
                     *self.state.chain.write() = pre_reorg_chain;
+                    if let Some(st) = atlas_zk::l2_state::L2State::from_snapshot_bytes(&pre_reorg_l2) {
+                        *self.l2_state.write() = st;
+                    }
                     self.snapshots.write().truncate(pre_reorg_snap_count);
                     return Err(e);
                 }
@@ -865,6 +1045,9 @@ impl ChainManager {
                 );
                 self.state.utxo_set.restore(pre_reorg_utxos);
                 *self.state.chain.write() = pre_reorg_chain;
+                if let Some(st) = atlas_zk::l2_state::L2State::from_snapshot_bytes(&pre_reorg_l2) {
+                    *self.l2_state.write() = st;
+                }
                 // Snapshot-Manager zurücksetzen: fork-Snapshots entfernen
                 self.snapshots.write().truncate(pre_reorg_snap_count);
                 return Err(e);
@@ -930,6 +1113,10 @@ impl ChainManager {
         // Genesis-Block ist leer (keine L1-UTXOs), L2-Root = EMPTY.
         self.state.utxo_set.restore(std::collections::HashMap::new());
         *self.state.chain.write() = atlas_state::state_db::ChainState::genesis();
+        // Modell A: node-L2-Baum ebenfalls auf den Genesis-Zustand zurücksetzen;
+        // apply_block baut ihn beim Replay wieder auf.
+        *self.l2_state.write() =
+            atlas_zk::l2_state::L2State::from_genesis(&atlas_zk::genesis_allocation());
         self.snapshots.write().truncate(0);
 
         // Aktive Kette via Standard-apply_block neu anwenden → self.state steht
@@ -1058,12 +1245,17 @@ mod tests {
     }
 
     #[test]
-    fn test_total_supply_tracks_actual_coinbase() {
-        let chain    = make_chain();
-        let block    = mine_block(&chain);
-        let expected = block.transactions[0].total_output();
+    fn test_total_supply_tracks_emission() {
+        // Modell A: Die Coinbase trägt KEINEN L1-Wert (Output = 0); die Emission
+        // (Subsidy) wird auf L2 gutgeschrieben und total_supply zählt genau diese
+        // Neuemission — NICHT den (jetzt null) L1-Coinbase-Output.
+        let chain = make_chain();
+        let block = mine_block(&chain);
+        assert_eq!(block.transactions[0].total_output(), atlas_core::amount::Amount::ZERO,
+            "Modell A: Coinbase-Output muss wertlos sein");
+        let (_, _, subsidy_atom) = chain.coinbase_l2_credit(1, &[]);
         chain.process_block(block).unwrap();
-        assert_eq!(chain.state.total_supply(), expected);
+        assert_eq!(chain.state.total_supply().as_atom(), subsidy_atom);
     }
 
     #[test]

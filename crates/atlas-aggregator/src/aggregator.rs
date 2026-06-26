@@ -23,7 +23,7 @@ use tracing::{error, info, warn};
 use crate::batch::{Batch, BatchBuilder};
 use crate::config::AggregatorConfig;
 use crate::l2_tx::{L2Transaction, L2TxError};
-use crate::node_client::{ForcedEntryInfo, ForcedRejectionInfo, NodeClient};
+use crate::node_client::{ForcedEntryInfo, ForcedRejectionInfo, L2BlockData, NodeClient};
 use crate::prover::AggregatorProver;
 
 /// Lädt einen persistierten L2-Snapshot `(node_height, L2State)` von Disk.
@@ -37,6 +37,38 @@ fn load_l2_snapshot(path: &str) -> Option<(u64, L2State)> {
     let height = u64::from_le_bytes(bytes[0..8].try_into().ok()?);
     let state = L2State::from_snapshot_bytes(&bytes[8..])?;
     Some((height, state))
+}
+
+/// Modell A (gebündelt): einen Block auf den L2-Zustand anwenden — exakt wie der
+/// Node in `apply_block`. Ein **leerer** Block (keine Calldata) lässt die Root
+/// UNVERÄNDERT und staut nur seine Coinbase-Credits in `pending` auf. Ein
+/// **Settlement**-Block wendet erst die Transfers an, dann die aufgelaufenen
+/// `pending`-Credits PLUS die eigenen (Credits sind additiv → Reihenfolge egal).
+fn apply_l2_block(
+    state: &mut L2State,
+    b: &L2BlockData,
+    pending: &mut Vec<([u8; 20], u128)>,
+) -> Result<(), String> {
+    if !b.has_settlement {
+        // Leerer Block: Root unverändert, Credits aufstauen.
+        pending.extend(b.credits.iter().copied());
+        return Ok(());
+    }
+    // Settlement-Block: Transfers (Calldata kann leer sein → Heartbeat), dann die
+    // aufgelaufenen `pending`-Credits PLUS die eigenen (Credits sind additiv).
+    if !b.calldata.is_empty() {
+        let inputs = atlas_zk::l2_state::decode_calldata(&b.calldata)
+            .map_err(|e| format!("calldata decode (Block {}): {e}", b.height))?;
+        state.apply_calldata(&inputs)
+            .map_err(|e| format!("calldata apply (Block {}): {e:?}", b.height))?;
+    }
+    for (addr, amt) in pending.drain(..) {
+        if amt > 0 { state.credit(&addr, amt); }
+    }
+    for (addr, amt) in &b.credits {
+        if *amt > 0 { state.credit(addr, *amt); }
+    }
+    Ok(())
 }
 
 /// Maximale Anzahl gleichzeitiger State-Proofs/submitbatch-Calls.
@@ -167,18 +199,25 @@ struct AggregatorState {
     batches:   HashMap<String, BatchRecord>,
     last_flush: Instant,
     stats:     AggregatorStats,
-    /// Belegter L2-Zustand (Account-Baum). Wird bei jedem Flush nativ
-    /// fortgeschrieben; `root_bytes()` liefert die pre/post-State-Roots.
+    /// Modell A: der BESTÄTIGTE L2-Zustand des Nodes (Settlements + Coinbase-
+    /// Gutschriften). Wird AUSSCHLIESSLICH vom Follower fortgeschrieben (nicht
+    /// mehr optimistisch beim Flush) — `root_bytes()` ist die `pre_root` für den
+    /// nächsten Batch und entspricht exakt der Node-Tip-Root.
     l2:        L2State,
-    /// Ring-Puffer der letzten `(post_root, kompakter L2-Snapshot)` je Batch.
-    /// Nötig, weil der Aggregator dem Node VORAUS ist (lokal angewandt, noch
-    /// nicht gemined): so kann die Persistenz den Zustand schreiben, der EXAKT
-    /// zum aktuellen Node-Tip-Root passt, statt nur im seltenen Gleichstand.
-    recent:    std::collections::VecDeque<([u8; 32], Vec<u8>)>,
+    /// Höhe, bis zu der `l2` den Node nachvollzogen hat (Follower-Anker).
+    applied_height: u64,
+    /// `pre_root` des zuletzt geflushten Batches — Gate gegen das Bauen mehrerer
+    /// Batches gegen dieselbe (noch unbestätigte) Root.
+    last_flush_root: Option<[u8; 32]>,
 }
 
-/// Maximale Anzahl gepufferter Batch-Zustände (~3,4 KB je Eintrag).
-const RECENT_STATES_CAP: usize = 256;
+/// Mindest-Wartezeit für einen erneuten Flush gegen UNVERÄNDERTE Root (Retry,
+/// falls ein Batch verworfen wurde und die Root nicht vorrückt).
+const FLUSH_RETRY_SECS: u64 = 30;
+
+/// Modell A: Ab wie vielen aufgelaufenen Blöcken (Emission seit dem letzten
+/// Settlement) der Heartbeat ein leeres Settlement zum Ausschütten einreicht.
+const HEARTBEAT_BLOCKS: u64 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct AggregatorStats {
@@ -238,7 +277,8 @@ impl Aggregator {
             last_flush: Instant::now(),
             stats:      AggregatorStats::default(),
             l2,
-            recent:     std::collections::VecDeque::new(),
+            applied_height:  0,
+            last_flush_root: None,
         }));
 
         Ok(Aggregator {
@@ -289,23 +329,70 @@ impl Aggregator {
     /// den Zustand NUR, wenn die resultierende Root == Node-Tip-Root ist.
     /// Gibt die Tip-Höhe zurück. Modifiziert `self.state.l2` erst bei Erfolg.
     async fn resync_onto(&self, mut base_state: L2State, base_height: u64) -> anyhow::Result<u64> {
-        let (height, target_root, calldata) = self.node.get_l2_snapshot(base_height).await?;
-        if !calldata.is_empty() {
-            let inputs = atlas_zk::l2_state::decode_calldata(&calldata)
-                .map_err(|e| anyhow::anyhow!("Calldata-Decode: {e}"))?;
-            let n = inputs.len();
-            base_state.apply_calldata(&inputs)
-                .map_err(|e| anyhow::anyhow!("Replay ({n} TXs ab Höhe {base_height}): {e:?}"))?;
+        let (height, target_root, blocks) = self.node.get_l2_snapshot(base_height).await?;
+        let mut pending: Vec<([u8; 20], u128)> = Vec::new();
+        let mut new_applied = base_height;
+        for b in &blocks {
+            apply_l2_block(&mut base_state, b, &mut pending)
+                .map_err(|e| anyhow::anyhow!("Replay Block {} (ab {base_height}): {e}", b.height))?;
+            if b.has_settlement { new_applied = b.height; }
         }
         let local = base_state.root_bytes();
         if local != target_root {
             anyhow::bail!(
-                "Root {} != Node-Root {} (Höhe {})",
-                hex::encode(local), hex::encode(target_root), height
+                "Root {} != Node-Root {} (Höhe {}, {} Blöcke)",
+                hex::encode(local), hex::encode(target_root), height, blocks.len()
             );
         }
-        self.state.lock().l2 = base_state;
+        {
+            let mut s = self.state.lock();
+            s.l2 = base_state;
+            // applied_height = letzter Settlement-Block (leere Blöcke danach
+            // werden nächste Runde re-akkumuliert → restart-sicher).
+            s.applied_height = new_applied;
+        }
         Ok(height)
+    }
+
+    /// Modell A — Live-Follower: verfolgt die Chain blockweise und schreibt den
+    /// bestätigten L2-Zustand fort (Settlements + Coinbase-Gutschriften), sodass
+    /// die Aggregator-Root stets der Node-Tip-Root entspricht. EINZIGER Mutator
+    /// von `state.l2` im Betrieb. Läuft als Hintergrund-Task.
+    pub async fn follow_chain(&self) {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            let from = self.state.lock().applied_height;
+            let (tip, tip_root, blocks) = match self.node.get_l2_snapshot(from).await {
+                Ok(v) => v,
+                Err(e) => { warn!("Follower: getl2snapshot fehlgeschlagen: {e}"); continue; }
+            };
+            if blocks.is_empty() { continue; }
+            // Auf einer Kopie anwenden (all-or-nothing), dann übernehmen.
+            let mut trial = self.state.lock().l2.clone();
+            let mut pending: Vec<([u8; 20], u128)> = Vec::new();
+            let mut new_applied = from;
+            let mut ok = true;
+            for b in &blocks {
+                if let Err(e) = apply_l2_block(&mut trial, b, &mut pending) {
+                    warn!("Follower: Block {} nicht anwendbar: {e}", b.height);
+                    ok = false;
+                    break;
+                }
+                if b.has_settlement { new_applied = b.height; }
+            }
+            if !ok { continue; }
+            // `trial` steht nach dem letzten Settlement (nachfolgende leere Blöcke
+            // staun nur `pending` auf) — das muss exakt die Node-Tip-Root sein.
+            if trial.root_bytes() != tip_root {
+                warn!("Follower: rekonstruierte Root != Node-Tip-Root (Höhe {tip}) — überspringe, retry");
+                continue;
+            }
+            {
+                let mut s = self.state.lock();
+                s.l2 = trial;
+                s.applied_height = new_applied;
+            }
+        }
     }
 
     /// Schreibt den L2-Zustand + zugehörige Node-Höhe atomar auf Disk — aber nur,
@@ -317,25 +404,12 @@ impl Aggregator {
         if path.is_empty() {
             return Ok(());
         }
-        // Billiger Head-Check: Node-Höhe + Root (from_height = MAX ⇒ leere Calldata).
-        let (height, node_root, _cd) = self.node.get_l2_snapshot(u64::MAX).await?;
-        // Den Zustand finden, der EXAKT zur Node-Tip-Root passt: entweder der
-        // aktuelle (Gleichstand) ODER ein gepufferter früherer Batch-Stand — der
-        // Aggregator ist dem Node unter Last fast immer voraus.
-        let bytes = {
-            let mut state = self.state.lock();
-            if state.l2.root_bytes() == node_root {
-                Some(state.l2.to_snapshot_bytes())
-            } else if let Some(pos) = state.recent.iter().position(|(r, _)| *r == node_root) {
-                let b = state.recent[pos].1.clone();
-                state.recent.drain(0..=pos); // ältere, gesettelte Stände verwerfen
-                Some(b)
-            } else {
-                None
-            }
-        };
-        let Some(bytes) = bytes else {
-            return Ok(()); // Node-Tip-Root (noch) nicht im Puffer — später erneut
+        // Modell A: `state.l2` IST der bestätigte Node-Zustand bei `applied_height`
+        // (der Follower hält ihn synchron). Also direkt mit dieser Höhe persistieren
+        // — kein Puffer-Matching mehr nötig.
+        let (height, bytes) = {
+            let state = self.state.lock();
+            (state.applied_height, state.l2.to_snapshot_bytes())
         };
         let mut buf = Vec::with_capacity(8 + bytes.len());
         buf.extend_from_slice(&height.to_le_bytes());
@@ -423,6 +497,45 @@ impl Aggregator {
     /// Zeuge nachweislich abgelehnt. Sonst würde der Node Settlements mit
     /// fälligen, unbedienten Einträgen ablehnen.
     pub async fn flush_batch(&self) {
+        self.flush_inner(false).await
+    }
+
+    /// Modell A — Heartbeat: reicht ein LEERES Settlement (0 Transfers) ein, um
+    /// die aufgelaufene Coinbase-Emission auszuschütten. Nötig für den Fair Launch
+    /// (kein Premine): ohne ein Settlement käme die Emission nie in ein ausgebbares
+    /// Konto. Nur wenn Emission ansteht (Node-Tip > applied_height) und der Builder
+    /// leer ist (sonst erledigt es ein normaler Flush).
+    pub async fn maybe_heartbeat(&self) {
+        // Steht Emission an? (Node hat seit dem letzten Settlement Blöcke gemined.)
+        let applied = self.state.lock().applied_height;
+        let tip = match self.node.get_l2_snapshot(u64::MAX).await {
+            Ok((h, _, _)) => h,
+            Err(_) => return,
+        };
+        let has_user_txs = self.state.lock().builder.len() > 0;
+        if tip > applied + HEARTBEAT_BLOCKS && !has_user_txs {
+            info!("Heartbeat: {} Blöcke aufgelaufene Emission seit Settlement {} — leeres Settlement zum Ausschütten.",
+                tip - applied, applied);
+            self.flush_inner(true).await;
+        }
+    }
+
+    async fn flush_inner(&self, allow_empty: bool) {
+        // Modell A Gate: keinen neuen Batch gegen dieselbe (noch unbestätigte)
+        // Root bauen. Der Follower rückt `state.l2` vor, sobald der vorige Batch
+        // gemined ist; erst dann — oder nach `FLUSH_RETRY_SECS` (Retry bei Verwurf)
+        // — wird wieder geflusht. Verhindert Stapel rejecteter Batches, weil die
+        // L2-Root unter Modell A pro Block (Coinbase) vorrückt.
+        {
+            let state = self.state.lock();
+            let cur = state.l2.root_bytes();
+            if state.last_flush_root == Some(cur)
+                && state.last_flush.elapsed().as_secs() < FLUSH_RETRY_SECS
+            {
+                return;
+            }
+        }
+
         let forced_entries = match self.node.get_forced_queue().await {
             Ok(v) => v,
             Err(e) => {
@@ -464,7 +577,7 @@ impl Aggregator {
                 state.builder.push(tx);
             }
 
-            if combined.is_empty() && rejections.is_empty() {
+            if combined.is_empty() && rejections.is_empty() && !allow_empty {
                 None
             } else {
                 let total_fees: u128 = combined.iter().map(|t| t.fee).sum();
@@ -503,16 +616,15 @@ impl Aggregator {
         let (witness, pre_root, post_root) = {
             let mut state = self.state.lock();
             let pre_root = state.l2.root_bytes();
-            match state.l2.apply(&signed_inputs) {
+            // Modell A: auf einer KOPIE anwenden (nur für Witness + post_root). Der
+            // bestätigte Zustand wird hier NICHT committet — der Follower übernimmt
+            // den Block, sobald er gemined ist (inkl. Coinbase-Gutschrift). So
+            // bleibt `state.l2` exakt die Node-Tip-Root.
+            let mut trial = state.l2.clone();
+            match trial.apply(&signed_inputs) {
                 Ok(w) => {
-                    let post_root = state.l2.root_bytes();
-                    // Zustand NACH diesem Batch puffern, damit die Persistenz
-                    // später genau den zum Node-Tip-Root passenden Stand findet.
-                    let snap = state.l2.to_snapshot_bytes();
-                    state.recent.push_back((post_root, snap));
-                    while state.recent.len() > RECENT_STATES_CAP {
-                        state.recent.pop_front();
-                    }
+                    let post_root = trial.root_bytes();
+                    state.last_flush_root = Some(pre_root); // Gate gegen Doppel-Flush
                     state.batches.insert(batch_id_hex.clone(), BatchRecord {
                         batch_id:     batch_id_hex.clone(),
                         tx_count:     batch.transactions.len() as u32,
