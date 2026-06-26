@@ -359,14 +359,20 @@ impl Aggregator {
     /// die Aggregator-Root stets der Node-Tip-Root entspricht. EINZIGER Mutator
     /// von `state.l2` im Betrieb. Läuft als Hintergrund-Task.
     pub async fn follow_chain(&self) {
+        // Zähler für ANHALTENDE Divergenz (Block nicht anwendbar / Root-Mismatch).
+        // Tritt v.a. bei einem Reorg unterhalb von `applied_height` auf (Multi-Node):
+        // dann ist der Aggregator-Zustand auf einem verworfenen Fork. Heilung: nach
+        // wenigen Fehlversuchen ein voller Resync (Snapshot scheitert → Full-Replay
+        // ab Genesis auf dem neuen Fork).
+        let mut diverged: u32 = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
             let from = self.state.lock().applied_height;
             let (tip, tip_root, blocks) = match self.node.get_l2_snapshot(from).await {
                 Ok(v) => v,
-                Err(e) => { warn!("Follower: getl2snapshot fehlgeschlagen: {e}"); continue; }
+                Err(e) => { warn!("Follower: getl2snapshot fehlgeschlagen: {e}"); continue; } // Netz, kein Divergenz-Signal
             };
-            if blocks.is_empty() { continue; }
+            if blocks.is_empty() { diverged = 0; continue; }
             // Auf einer Kopie anwenden (all-or-nothing), dann übernehmen.
             let mut trial = self.state.lock().l2.clone();
             let mut pending: Vec<([u8; 20], u128)> = Vec::new();
@@ -380,13 +386,22 @@ impl Aggregator {
                 }
                 if b.has_settlement { new_applied = b.height; }
             }
-            if !ok { continue; }
             // `trial` steht nach dem letzten Settlement (nachfolgende leere Blöcke
-            // staun nur `pending` auf) — das muss exakt die Node-Tip-Root sein.
-            if trial.root_bytes() != tip_root {
-                warn!("Follower: rekonstruierte Root != Node-Tip-Root (Höhe {tip}) — überspringe, retry");
+            // stauen nur `pending` auf) — das muss exakt die Node-Tip-Root sein.
+            if !ok || trial.root_bytes() != tip_root {
+                diverged += 1;
+                warn!("Follower: Divergenz (#{diverged}) bei Höhe {tip} — Reorg? retry/Resync.");
+                if diverged >= 3 {
+                    warn!("Follower: anhaltende Divergenz → voller L2-Resync (Reorg-Selbstheilung).");
+                    if let Err(e) = self.resync_l2().await {
+                        warn!("Follower: Resync fehlgeschlagen: {e}");
+                    } else {
+                        diverged = 0;
+                    }
+                }
                 continue;
             }
+            diverged = 0;
             {
                 let mut s = self.state.lock();
                 s.l2 = trial;

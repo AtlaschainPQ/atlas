@@ -65,6 +65,38 @@ Langzeit-Multi-Node, echte Genesis-Allokation) — siehe unten.
   Pseudo-Input-TXs (SettlementBid/L2ForcedTx) in die Coinbase, obwohl sie
   niemand zahlt → Coinbase-Inflation. Jetzt ausgeschlossen (Regressionstest).
 
+### Geldpolitik vereinheitlicht — Modell A (2026-06-26)
+Früher inkohärent: L1 mintete 100 Mio PoW-Coins, L2 war genesis-only ohne
+Bridge → zwei entkoppelte Gelder. **Modell A** vereinheitlicht: EIN Geld, lebt
+auf L2; die PoW-Emission wird direkt L2-Konten von Miner/Prover gutgeschrieben.
+- **Kein L1-Coin**: `new_coinbase` trägt Wert 0; die Validierung lehnt jeden
+  nicht-null L1-Coinbase-Output ab. Emission nativ auf L2.
+- **Inflations-sicher**: Der Node rechnet die Gutschrift selbst aus dem
+  Schedule nach (Subsidy + Settlement-Fees, 70/30) — aus der Coinbase kommen nur
+  die Adressen. Regressionstest `test_coinbase_l2_credit_inflation_safe` sichert:
+  Gutschrift == Schedule, und nach 32 Halvings ist die Subsidy 0 (100M-Cap).
+- **Gebündelte Gutschrift**: leere Blöcke lassen die L2-Root unverändert, die
+  Emission läuft auf und wird beim nächsten Settlement-Block nachgetragen. Damit
+  bleibt die Settlement-`pre_root` zwischen Settlements stabil (sonst race-t die
+  pro-Block vorrückende Root mit dem ~24-s-Proving → Settlement-Livelock; live
+  entdeckt und so behoben). Der Node hält dafür den vollen L2-Baum (reorg-fest
+  via Snapshot-Bytes; Reorg × Walk-Back auf Stale-Reads geprüft — ok, da
+  `save_block` den Höhen-Index pro Block aktualisiert).
+- **Fair Launch**: `genesis/alloc.json` leer (kein Premine) → Geld entsteht NUR
+  aus Mining. Aggregator-**Heartbeat** schüttet die aufgelaufene Emission per
+  leerem Settlement aus (sonst Bootstrap-Deadlock: Settlement braucht Funds,
+  Funds brauchen Settlement — live entdeckt und behoben).
+- **Live verifiziert (2026-06-26)**: Settlements landen, Emission 200/Block auf
+  L2, Heartbeat-Ausschüttung, Buchhaltung exakt (Sender/Empfänger/Miner-Fees
+  konserviert). Whitepaper/README als implementiert dokumentiert.
+- **Adversariale Review (2026-06-26)**: Geld-Vektoren geprüft — keine
+  Über-Gutschrift (Schedule-gebunden), keine Doppel-Gutschrift (Walk-Back stoppt
+  am letzten Settlement, jeder Block genau einmal), Cap erzwungen, Fees
+  konserviert, leerer Block kann Root nicht ändern. Offener Perf-Hinweis: ein
+  Settlement nach SEHR vielen leeren Blöcken triggert einen O(Gap)-Walk-Back;
+  praktisch durch den Heartbeat (≤ 3 Blöcke) begrenzt — vor Mainnet als harte
+  Obergrenze festschreiben (Audit-Punkt).
+
 ### Genesis-L2-Root-Fix (2026-06-14) — KRITISCH, war Launch-Blocker
 Auf einer frischen Chain startete der Node-State mit `EMPTY_L2_ROOT`, während
 Genesis-Block UND Aggregator den vorab geförderten `GENESIS_L2_ROOT` verankern.

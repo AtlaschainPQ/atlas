@@ -1183,6 +1183,28 @@ mod tests {
         Arc::new(ChainManager::new(params, state, mempool, true))
     }
 
+    /// Inflations-Schutz (Modell A): Die Coinbase-Emissions-Gutschrift entspricht
+    /// EXAKT dem Reward-Schedule — der Node rechnet sie selbst nach, ein Miner kann
+    /// sich also nicht mehr gutschreiben. Nach dem Halving-Cap ist die Subsidy 0.
+    #[test]
+    fn test_coinbase_l2_credit_inflation_safe() {
+        let chain = make_chain();
+        let p     = chain.consensus_params().clone();
+        let sched = RewardSchedule::new(&p);
+
+        // Höhe 1, keine Settlements → Gutschrift == Subsidy, Split summiert exakt.
+        let (m, pr, subsidy) = chain.coinbase_l2_credit(1, &[]);
+        assert_eq!(subsidy, sched.subsidy_at(1).as_atom());
+        assert_eq!(m + pr, subsidy, "Gutschrift (ohne Fees) muss == Subsidy sein");
+        assert!(m > 0 && m <= subsidy);
+
+        // Nach dem letzten Halving: Subsidy 0 → keine Emission mehr (100M-Cap).
+        let past_cap = p.halving_interval * (p.max_halvings as u64) + 1;
+        let (m2, pr2, subsidy2) = chain.coinbase_l2_credit(past_cap, &[]);
+        assert_eq!(subsidy2, 0, "nach {} Halvings muss die Subsidy 0 sein", p.max_halvings);
+        assert_eq!(m2 + pr2, 0, "nach dem Cap darf keine Emission gutgeschrieben werden");
+    }
+
     fn mine_block(chain: &ChainManager) -> Block {
         let kp           = KeyPair::generate();
         let mut template = chain.block_template(kp.address, kp.address);
