@@ -68,6 +68,16 @@ impl UtxoSet {
         let mut utxos = self.utxos.write();
         let mut delta = self.delta.lock();
         for (index, output) in tx.outputs.iter().enumerate() {
+            // Modell A: wertlose Outputs (Coinbase-L2-Adress-Marker, SettlementBid-
+            // bid_output, L2ForcedTx-Marker) erzeugen KEINE UTXOs — sie tragen
+            // keinen ausgebbaren L1-Wert. Sonst würde das UTXO-Set über die Zeit mit
+            // unausgebbaren Null-Wert-Einträgen anwachsen (Bloat). Die Index-
+            // Nummerierung bleibt unverändert (nach Position), nur die Einfügung
+            // entfällt. Konsens-neutral: die UTXO-State-Root ist nicht im
+            // Block-Header committet/validiert.
+            if output.value.as_atom() == 0 {
+                continue;
+            }
             let outpoint = OutPoint { txid, index: index as u32 };
             let utxo = Utxo {
                 value:        output.value,
@@ -281,15 +291,31 @@ mod tests {
     }
 
     #[test]
+    fn test_zero_value_outputs_skipped() {
+        // Modell A: wertlose Outputs (z.B. die L1-wertlose Coinbase) erzeugen
+        // KEINE UTXOs — verhindert Null-Wert-UTXO-Bloat.
+        let set  = UtxoSet::new();
+        let addr = Address([7u8; 20]);
+        let coinbase = Transaction::new_coinbase(0, Amount::ZERO, Amount::ZERO, addr, Address([8u8; 20]));
+        let before = set.len();
+        set.apply_outputs(coinbase.txid(), &coinbase, 0);
+        assert_eq!(set.len(), before, "wertlose Coinbase-Outputs dürfen keine UTXOs erzeugen");
+        assert_eq!(set.balance(&addr).as_atom(), 0);
+    }
+
+    #[test]
     fn test_delta_tracking() {
         let set  = UtxoSet::new();
         let addr = Address([1u8; 20]);
-        let cb   = Transaction::new_coinbase(1, Amount::from_atl(50), Amount::ZERO, addr, addr);
+        let mut cb = Transaction::new_coinbase(1, Amount::from_atl(50), Amount::ZERO, addr, addr);
+        // Modell A: Coinbase L1-wertlos (→ kein UTXO). Für den Delta-Tracking-Test
+        // injizieren wir einen Wert in den (einzigen) Output.
+        cb.outputs[0].value = Amount::from_atl(50);
         let txid = cb.txid();
         set.apply_outputs(txid, &cb, 1);
 
         let delta = set.drain_delta();
-        assert_eq!(delta.created.len(), 1); // only miner output (prover_reward = 0)
+        assert_eq!(delta.created.len(), 1); // ein wertiger Output
         assert!(delta.spent.is_empty());
 
         // Nach drain: delta ist leer
