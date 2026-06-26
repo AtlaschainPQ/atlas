@@ -412,6 +412,30 @@ impl Storage {
         }
     }
 
+    /// Modell A: Persistiert den node-gehaltenen L2-Baum als `(height, snapshot)`,
+    /// damit der Startup-Rebuild nur das Delta seit `height` nachspielen muss
+    /// statt die ganze Kette (O(Delta) statt O(Chain)).
+    pub fn save_l2_snapshot(&self, height: u64, bytes: &[u8]) -> Result<(), StorageError> {
+        let cf = self.db.cf_handle(CF_CHAIN).ok_or(StorageError::MissingCf(CF_CHAIN))?;
+        let mut v = Vec::with_capacity(8 + bytes.len());
+        v.extend_from_slice(&height.to_le_bytes());
+        v.extend_from_slice(bytes);
+        self.db.put_cf(cf, b"l2_snapshot", &v)?;
+        Ok(())
+    }
+
+    /// Lädt den persistierten L2-Snapshot `(height, snapshot_bytes)`, falls vorhanden.
+    pub fn load_l2_snapshot(&self) -> Result<Option<(u64, Vec<u8>)>, StorageError> {
+        let cf = self.db.cf_handle(CF_CHAIN).ok_or(StorageError::MissingCf(CF_CHAIN))?;
+        match self.db.get_cf(cf, b"l2_snapshot")? {
+            Some(v) if v.len() >= 8 => {
+                let height = u64::from_le_bytes(v[0..8].try_into().unwrap());
+                Ok(Some((height, v[8..].to_vec())))
+            }
+            _ => Ok(None),
+        }
+    }
+
     // ── UTXO Set ──────────────────────────────────────────────────────────────
 
     pub fn save_utxos(&self, utxos: &HashMap<OutPoint, Utxo>) -> Result<(), StorageError> {

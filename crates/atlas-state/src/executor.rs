@@ -249,8 +249,10 @@ mod tests {
 
         let result = executor.execute(&genesis).unwrap();
         assert_eq!(result.tx_count, 1);
-        assert_eq!(utxo.balance(&miner).as_atl_floor(), 44);
-        assert_eq!(utxo.balance(&prover).as_atl_floor(), 19);
+        // Modell A: Die Coinbase trägt KEINEN L1-Wert (Output 0) — die Emission
+        // wird auf L2 gutgeschrieben, nicht als L1-UTXO. L1-Balance daher 0.
+        assert_eq!(utxo.balance(&miner).as_atl_floor(), 0);
+        assert_eq!(utxo.balance(&prover).as_atl_floor(), 0);
     }
 
     #[test]

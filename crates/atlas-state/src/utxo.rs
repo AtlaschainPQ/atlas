@@ -260,13 +260,16 @@ mod tests {
     fn test_utxo_apply_and_lookup() {
         let set   = UtxoSet::new();
         let addr  = Address([1u8; 20]);
-        let coinbase = Transaction::new_coinbase(
+        let mut coinbase = Transaction::new_coinbase(
             0,
             Amount::from_atl(44),
             Amount::from_atl(19),
             addr,
             Address([2u8; 20]),
         );
+        // Modell A: Die Coinbase ist L1-wertlos (Output 0). Für diesen reinen
+        // UTXO-Set-Mechanik-Test injizieren wir einen Wert.
+        coinbase.outputs[0].value = Amount::from_atl(44);
         let txid = coinbase.txid();
         set.apply_outputs(txid, &coinbase, 0);
 

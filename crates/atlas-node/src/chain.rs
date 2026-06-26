@@ -446,31 +446,62 @@ impl ChainManager {
         let storage = match self.storage.as_ref() { Some(s) => s.clone(), None => return };
         let height  = self.state.chain.read().height;
         if height == 0 { return; }
-        let mut tree = atlas_zk::l2_state::L2State::from_genesis(&atlas_zk::genesis_allocation());
-        for h in 1..=height {
-            let block = match storage.load_block_by_height(h) {
-                Ok(Some(b)) => b,
-                _ => { warn!("L2-Rebuild: Block {h} fehlt im Storage — Abbruch, L2-Baum bleibt Genesis."); return; }
-            };
+        let chain_root = self.state.chain.read().l2_state_root;
+
+        // Schnellweg: persistierten L2-Snapshot laden + nur das Delta nachspielen
+        // (O(Delta) statt O(Chain)). Der Snapshot wird nur auf Settlement-Blöcken
+        // geschrieben, daher stoppt der Walk-Back im Delta sauber am Snapshot-Block
+        // → keine Doppel-Gutschrift.
+        if let Ok(Some((snap_h, bytes))) = storage.load_l2_snapshot() {
+            if snap_h <= height {
+                if let Some(base) = atlas_zk::l2_state::L2State::from_snapshot_bytes(&bytes) {
+                    if let Some(tree) = self.replay_l2_delta(&storage, base, snap_h, height) {
+                        if tree.root_bytes() == chain_root.0 {
+                            *self.l2_state.write() = tree;
+                            info!("Modell A: L2-Baum via Snapshot (Höhe {snap_h}) + Delta rekonstruiert (Tip {height}).");
+                            return;
+                        }
+                    }
+                }
+                warn!("L2-Snapshot unbrauchbar/inkonsistent — Full-Replay ab Genesis.");
+            }
+        }
+
+        // Fallback: Full-Replay ab Genesis.
+        let genesis = atlas_zk::l2_state::L2State::from_genesis(&atlas_zk::genesis_allocation());
+        match self.replay_l2_delta(&storage, genesis, 0, height) {
+            Some(tree) if tree.root_bytes() == chain_root.0 => {
+                *self.l2_state.write() = tree;
+                info!("Modell A: L2-Baum aus Storage (Full-Replay) rekonstruiert (Höhe {height}, Root passt).");
+            }
+            _ => warn!("L2-Rebuild: rekonstruierte Root != chain.l2_state_root {} — Inkonsistenz!",
+                chain_root.as_hex()),
+        }
+    }
+
+    /// Spielt die L2-Übergänge der Blöcke `(start_h, height]` auf `tree` ab
+    /// (Settlement-Transfers + gebündelte Coinbase-Emission, exakt wie apply_block).
+    /// `None` bei fehlendem/defektem Block.
+    fn replay_l2_delta(
+        &self,
+        storage: &Arc<Storage>,
+        mut tree: atlas_zk::l2_state::L2State,
+        start_h: u64,
+        height: u64,
+    ) -> Option<atlas_zk::l2_state::L2State> {
+        for h in (start_h + 1)..=height {
+            let block = storage.load_block_by_height(h).ok()??;
             let settlements = Self::extract_settlements(&block.transactions);
             if settlements.is_empty() { continue; } // leerer Block: L2-Root unverändert
             for s in &settlements {
-                if let Ok(inputs) = atlas_zk::l2_state::decode_calldata(&s.calldata) {
-                    let _ = tree.apply_calldata(&inputs);
-                }
+                let inputs = atlas_zk::l2_state::decode_calldata(&s.calldata).ok()?;
+                tree.apply_calldata(&inputs).ok()?;
             }
-            for (addr, amt) in self.pending_coinbase_credits(block.header.height, &block.transactions) {
+            for (addr, amt) in self.pending_coinbase_credits(h, &block.transactions) {
                 if amt > 0 { tree.credit(&addr, amt); }
             }
         }
-        let chain_root = self.state.chain.read().l2_state_root;
-        if tree.root_bytes() == chain_root.0 {
-            *self.l2_state.write() = tree;
-            info!("Modell A: L2-Baum aus Storage rekonstruiert (Höhe {height}, Root passt).");
-        } else {
-            warn!("L2-Rebuild: rekonstruierte Root {} != chain.l2_state_root {} — Inkonsistenz!",
-                hex::encode(tree.root_bytes()), chain_root.as_hex());
-        }
+        Some(tree)
     }
 
     /// Abonniert Chain-Events (Block akzeptiert, Reorg, …)
@@ -899,6 +930,7 @@ impl ChainManager {
         // Modell A: den fortgeschriebenen L2-Baum übernehmen (Commit nach
         // erfolgreicher Block-Anwendung). prev_l2_root == self.l2_state vorher
         // wurde oben geprüft; Root-Match gegen new_l2_root ebenfalls.
+        let l2_changed = new_l2_tree.is_some();
         if let Some(tree) = new_l2_tree {
             *self.l2_state.write() = tree;
         }
@@ -917,6 +949,14 @@ impl ChainManager {
             let chain = self.state.chain.read();
             if let Err(e) = storage.save_chain_state(&chain) {
                 warn!("Failed to persist chain state at height {}: {}", height, e);
+            }
+            // Modell A: L2-Snapshot nur persistieren, wenn sich der Baum geändert
+            // hat (Settlement-Block) → O(Delta)-Startup-Rebuild statt O(Chain).
+            if l2_changed {
+                let bytes = self.l2_state.read().to_snapshot_bytes();
+                if let Err(e) = storage.save_l2_snapshot(height, &bytes) {
+                    warn!("Failed to persist L2 snapshot at height {}: {}", height, e);
+                }
             }
             // Inkrementelles UTXO-Update: nur veränderte UTXOs schreiben
             let delta = self.state.utxo_set.drain_delta();
