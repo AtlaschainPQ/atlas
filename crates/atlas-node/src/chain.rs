@@ -427,7 +427,50 @@ impl ChainManager {
         }
 
         self.storage = Some(arc);
+
+        // Modell A: Den vollen L2-Baum aus der persistierten Kette rekonstruieren.
+        // `ChainManager::new` initialisiert `l2_state` auf Genesis; ohne diesen
+        // Schritt divergiert er nach einem Neustart von der (fortgeschrittenen)
+        // `chain.l2_state_root` → das nächste Settlement würde als „out of sync"
+        // abgelehnt und der Node bliebe hängen.
+        self.rebuild_l2_state_from_storage();
+
         self
+    }
+
+    /// Modell A: Rekonstruiert `self.l2_state` aus den persistierten Blöcken
+    /// (Settlement-Transfers + gebündelte Coinbase-Emission, exakt wie
+    /// `apply_block`), sodass seine Root der geladenen `chain.l2_state_root`
+    /// entspricht. Läuft einmalig beim Start mit persistentem Storage.
+    fn rebuild_l2_state_from_storage(&self) {
+        let storage = match self.storage.as_ref() { Some(s) => s.clone(), None => return };
+        let height  = self.state.chain.read().height;
+        if height == 0 { return; }
+        let mut tree = atlas_zk::l2_state::L2State::from_genesis(&atlas_zk::genesis_allocation());
+        for h in 1..=height {
+            let block = match storage.load_block_by_height(h) {
+                Ok(Some(b)) => b,
+                _ => { warn!("L2-Rebuild: Block {h} fehlt im Storage — Abbruch, L2-Baum bleibt Genesis."); return; }
+            };
+            let settlements = Self::extract_settlements(&block.transactions);
+            if settlements.is_empty() { continue; } // leerer Block: L2-Root unverändert
+            for s in &settlements {
+                if let Ok(inputs) = atlas_zk::l2_state::decode_calldata(&s.calldata) {
+                    let _ = tree.apply_calldata(&inputs);
+                }
+            }
+            for (addr, amt) in self.pending_coinbase_credits(block.header.height, &block.transactions) {
+                if amt > 0 { tree.credit(&addr, amt); }
+            }
+        }
+        let chain_root = self.state.chain.read().l2_state_root;
+        if tree.root_bytes() == chain_root.0 {
+            *self.l2_state.write() = tree;
+            info!("Modell A: L2-Baum aus Storage rekonstruiert (Höhe {height}, Root passt).");
+        } else {
+            warn!("L2-Rebuild: rekonstruierte Root {} != chain.l2_state_root {} — Inkonsistenz!",
+                hex::encode(tree.root_bytes()), chain_root.as_hex());
+        }
     }
 
     /// Abonniert Chain-Events (Block akzeptiert, Reorg, …)
