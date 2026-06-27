@@ -97,6 +97,33 @@ auf L2; die PoW-Emission wird direkt L2-Konten von Miner/Prover gutgeschrieben.
   praktisch durch den Heartbeat (≤ 3 Blöcke) begrenzt — vor Mainnet als harte
   Obergrenze festschreiben (Audit-Punkt).
 
+### ⚠️ OFFENER BUG — L2-Stall nach erstem Fee-Settlement (2026-06-27)
+Auf dem Live-Testnet beobachtet: solange nur **leere Heartbeat-Settlements**
+(fee=0) laufen, ist alles stabil. Das **erste echte L2-Transfer-Settlement mit
+Gebühren** (Block 2153, `txs=2, fees=10`) führte dazu, dass danach **jeder**
+Aggregator-Bid vom Node-Block-Template als `pre_root does not chain` verworfen
+wurde — Node- und Aggregator-L2-Root divergierten, die L2 stand ~4,5 h still.
+Auch ein Aggregator-Neustart mit Snapshot-Resync heilte nur kurz, dann
+re-divergierte der Live-Follower.
+- **NICHT die Emissionsmathematik**: ein paralleler Akkumulator-Refactor
+  (O(1) statt O(Gap)-Walk-Back) wurde getestet/deployt und wegen dieses Stalls
+  wieder zurückgerollt; das alte Binary rekonstruierte die gemined Kette
+  **fehlerfrei** (Beträge bit-identisch). Die Divergenz liegt im **Live-Pfad**
+  (Node↔Aggregator-Root-Synchronisation rund um Fee-Settlements), nicht in den
+  gutgeschriebenen Werten.
+- **Zweite Schwäche, dadurch offengelegt**: fällt ein Bid still aus dem
+  Block-Template (`pre_root does not chain`), **merkt es der Aggregator nie**
+  (submitbatch hat den Bid akzeptiert) → keine Selbstheilung. Der Stall wäre
+  sonst evtl. von selbst ausgeheilt.
+- **Status**: Root-Cause offen. Reproduktion erfordert einen Integrationstest
+  über Node **und** Aggregator-Follower mit der Sequenz *mehrere leere Blöcke →
+  Fee-Settlement → weitere Settlements*, der `pre_root` vor/nach jedem Schritt
+  vergleicht (der bestehende Echt-Groth16-E2E deckt nur einen einzelnen Übergang
+  ab). **Vor jedem weiteren Mainnet-Schritt zu klären** — ein Mainnet ohne echte
+  Transfers ist sinnlos, und genau die brechen aktuell die L2.
+- **Akkumulator-Arbeit** liegt in der Git-Historie (Commit `3195866`, auf `main`
+  via `c0be6c4` revertet) zur Wiederverwendung, sobald der Live-Desync gefixt ist.
+
 ### Genesis-L2-Root-Fix (2026-06-14) — KRITISCH, war Launch-Blocker
 Auf einer frischen Chain startete der Node-State mit `EMPTY_L2_ROOT`, während
 Genesis-Block UND Aggregator den vorab geförderten `GENESIS_L2_ROOT` verankern.
