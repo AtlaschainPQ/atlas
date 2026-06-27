@@ -97,48 +97,40 @@ auf L2; die PoW-Emission wird direkt L2-Konten von Miner/Prover gutgeschrieben.
   praktisch durch den Heartbeat (≤ 3 Blöcke) begrenzt — vor Mainnet als harte
   Obergrenze festschreiben (Audit-Punkt).
 
-### ⚠️ OFFENER BUG — L2-Stall nach erstem Fee-Settlement (2026-06-27)
-Auf dem Live-Testnet beobachtet: solange nur **leere Heartbeat-Settlements**
-(fee=0) laufen, ist alles stabil. Das **erste echte L2-Transfer-Settlement mit
-Gebühren** (Block 2153, `txs=2, fees=10`) führte dazu, dass danach **jeder**
-Aggregator-Bid vom Node-Block-Template als `pre_root does not chain` verworfen
-wurde — Node- und Aggregator-L2-Root divergierten, die L2 stand ~4,5 h still.
-Auch ein Aggregator-Neustart mit Snapshot-Resync heilte nur kurz, dann
-re-divergierte der Live-Follower.
-- **NICHT die Emissionsmathematik**: ein paralleler Akkumulator-Refactor
-  (O(1) statt O(Gap)-Walk-Back) wurde getestet/deployt und wegen dieses Stalls
-  wieder zurückgerollt; das alte Binary rekonstruierte die gemined Kette
-  **fehlerfrei** (Beträge bit-identisch). Die Divergenz liegt im **Live-Pfad**
-  (Node↔Aggregator-Root-Synchronisation rund um Fee-Settlements), nicht in den
-  gutgeschriebenen Werten.
-- **Zweite Schwäche, dadurch offengelegt**: fällt ein Bid still aus dem
-  Block-Template (`pre_root does not chain`), **merkt es der Aggregator nie**
-  (submitbatch hat den Bid akzeptiert) → keine Selbstheilung. Der Stall wäre
-  sonst evtl. von selbst ausgeheilt.
-- **Eingegrenzt (2026-06-27)**: Alle deterministischen State-Math-Ursachen
-  systematisch AUSGESCHLOSSEN:
-  - Emissions-Mathematik (bit-identisch, sauberer Rebuild).
-  - Transfer-Tree-Math inkl. Neukonto-Indizierung: die zwei Mutationspfade
-    `apply()`/`apply_batch` (Aggregator-Bid/Proving) und
-    `apply_calldata()`/`apply_replay_fast` (Node `apply_block` + Follower/Resync)
-    liefern identische Roots — Regressionstest
-    `apply_paths_agree_on_transfer_to_new_account` (atlas-zk). Konsistent damit,
-    dass Block 2153 akzeptiert wurde.
-  - `getl2snapshot` (per-Block has_settlement/calldata/credits) und der Follower
-    `apply_l2_block` sind strukturell konsistent zum Node.
-  → Verbleibender Verdacht: **operativer/Concurrency-Pfad**, nicht die State-Math.
-  Wahrscheinlich eine Race zwischen `flush_inner` (liest `state.l2` für die
-  Bid-`pre_root`) und `follow_chain` (rückt `state.l2` vor), oder die
-  `applied_height`-Logik des Followers nach einem Fee-Settlement.
-- **Status**: Root-Cause auf den operativen Pfad eingegrenzt, aber noch nicht
-  final gepinnt. Nächster Schritt: Reproduktion über Node **und**
-  Aggregator-Follower mit der Sequenz *mehrere leere Blöcke → Fee-Settlement →
-  weitere Settlements* (der Echt-Groth16-E2E deckt nur einen Einzelübergang ab),
-  ODER Live-Repro mit einem Transfer aus einem geförderten Konto. **Vor jedem
-  weiteren Mainnet-Schritt zu klären** — ein Mainnet ohne echte Transfers ist
-  sinnlos, und genau die brechen aktuell die L2.
-- **Akkumulator-Arbeit** liegt in der Git-Historie (Commit `3195866`, auf `main`
-  via `c0be6c4` revertet) zur Wiederverwendung, sobald der Live-Desync gefixt ist.
+### Akkumulator-Regression: L2-Stall bei Fee-Settlement (2026-06-27, REVERTET)
+**Aktueller Stand ist NICHT betroffen** — diese Regression existierte nur im
+deployten Akkumulator-Binary (Commit `3195866`) und wurde via `c0be6c4`
+zurückgerollt. Festgehalten als Warnung für einen erneuten Akkumulator-Versuch.
+
+Ablauf: Ein O(1)-Emissions-Akkumulator (Ersatz für den O(Gap)-Walk-Back) wurde
+deployt. Nach dem **ersten echten Fee-Transfer-Settlement** (Block 2153,
+`txs=2, fees=10`) divergierten Node- und Aggregator-L2-Root; danach wurde jeder
+Aggregator-Bid vom Block-Template als `pre_root does not chain` verworfen, die L2
+stand ~4,5 h. Rollback auf das Vor-Binary → sofortige Erholung.
+
+- **Live-Repro WIDERLEGT „vorbestehend" (2026-06-27)**: Auf dem
+  zurückgerollten (aktuellen) Binary wurde ein echter Fee-Transfer aus dem
+  geförderten Konto `7fd1c7…` (amount 100, fee 10, an ein NEUES Konto)
+  eingereicht → **sauber gesettelt** (Empfänger erhielt 100, Sender-Nonce →1),
+  **0 `pre_root`-Drops**, Settlements liefen weiter. Das aktuelle Binary
+  verarbeitet echte Transfers also korrekt — der Stall war
+  **akkumulator-binary-spezifisch**, nicht im Konsens-/State-Modell.
+- **Deterministische State-Math als Ursache ausgeschlossen**: Emission
+  bit-identisch (altes Binary rekonstruiert die vom Akkumulator-Binary gemined
+  Kette fehlerfrei); die zwei Baum-Mutationspfade `apply_batch` (Bid/Proving)
+  und `apply_replay_fast` (Node+Follower) liefern identische Roots (Guard-Test
+  `apply_paths_agree_on_transfer_to_new_account`, atlas-zk). Der Akkumulator-Bug
+  liegt also im **Live-/Operativ-Pfad** des Akkumulator-Codes, nicht in den
+  gutgeschriebenen Werten — und ist VOR einem erneuten Deploy offline (auf
+  Branch) zu reproduzieren und zu fixen.
+- **Separat festgehaltene Robustheits-Schwäche**: fällt ein Bid still aus dem
+  Block-Template (`pre_root does not chain`), merkt es der Aggregator nie
+  (submitbatch hat ihn akzeptiert) → keine Selbstheilung. Im aktuellen Betrieb
+  unkritisch (kein Desync), aber ein guter Härtungspunkt: der Aggregator sollte
+  erkennen, wenn sein Bid nicht innerhalb von N Blöcken gemined wird, und neu
+  synchronisieren.
+- **Repro-Werkzeug**: `print_signed_submit_tx` (atlas-zk, `#[ignore]`) signiert
+  byte-identisch zur Web-Wallet und druckt die `/submit`-JSON aus ENV-Parametern.
 
 ### Genesis-L2-Root-Fix (2026-06-14) — KRITISCH, war Launch-Blocker
 Auf einer frischen Chain startete der Node-State mit `EMPTY_L2_ROOT`, während

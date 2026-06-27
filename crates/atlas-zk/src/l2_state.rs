@@ -588,6 +588,38 @@ mod tests {
         assert_eq!(s.root_bytes(), crate::empty_l2_state_root());
     }
 
+    /// HELFER (ignored, kein echter Test): druckt eine signierte `/submit`-TX-JSON
+    /// aus ENV-Parametern — für die KONTROLLIERTE Live-Reproduktion des
+    /// Fee-Settlement-Stalls (Incident 2026-06-27). Signiert byte-identisch zur
+    /// Web-Wallet (`build_l2_eddsa`). Aufruf:
+    ///   TX_SECRET=<hex32> TX_TO=<hex20> TX_AMOUNT=100 TX_FEE=10 TX_NONCE=0 \
+    ///   cargo test -p atlas-zk --lib print_signed_submit_tx -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn print_signed_submit_tx() {
+        use crate::eddsa::EddsaKeypair;
+        let g = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("ENV {k} fehlt"));
+        let secret: [u8; 32] = hex::decode(g("TX_SECRET").trim_start_matches("0x"))
+            .expect("TX_SECRET hex").as_slice().try_into().expect("TX_SECRET 32B");
+        let to: [u8; 20] = hex::decode(g("TX_TO").trim_start_matches("0x"))
+            .expect("TX_TO hex").as_slice().try_into().expect("TX_TO 20B");
+        let amount: u128 = g("TX_AMOUNT").parse().expect("TX_AMOUNT");
+        let fee:    u128 = g("TX_FEE").parse().expect("TX_FEE");
+        let nonce:  u64  = g("TX_NONCE").parse().expect("TX_NONCE");
+
+        let kp = EddsaKeypair::from_secret_bytes(&secret);
+        let (from, pubkey, sig) = build_l2_eddsa(&kp, &to, amount, fee, nonce);
+        let tx = serde_json::json!({
+            "from":   hex::encode(from),
+            "to":     hex::encode(to),
+            "amount": amount,
+            "fee":    fee,
+            "nonce":  nonce,
+            "auth": { "pubkey": pubkey.to_vec(), "signature": hex::encode(sig) }
+        });
+        println!("SUBMIT_JSON={}", tx);
+    }
+
     /// REPRODUKTION/GUARD (Incident 2026-06-27): Es gibt ZWEI Baum-Mutationspfade —
     /// `apply()`/`apply_batch` (vom Aggregator zum Beweisen + Bid-Bauen) und
     /// `apply_calldata()`/`apply_replay_fast` (vom Node in `apply_block` UND vom
