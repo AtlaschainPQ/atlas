@@ -148,19 +148,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ark-ed-on-bn254"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71892f265d01650e34988a546b37ea1d2ba1da162a639597a03d1550f26004d8"
-dependencies = [
- "ark-bn254",
- "ark-ec",
- "ark-ff",
- "ark-r1cs-std",
- "ark-std",
-]
-
-[[package]]
 name = "ark-ff"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -399,9 +386,6 @@ name = "atlas-node"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ark-bn254",
- "ark-ed-on-bn254",
- "ark-ff",
  "atlas-consensus",
  "atlas-core",
  "atlas-mempool",
@@ -432,8 +416,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "atlas-core",
- "atlas-zk",
- "hex",
  "rayon",
  "serde",
  "serde_json",
@@ -488,7 +470,6 @@ dependencies = [
  "argon2",
  "atlas-consensus",
  "atlas-core",
- "atlas-zk",
  "bincode",
  "hex",
  "rand",
@@ -508,11 +489,8 @@ dependencies = [
  "anyhow",
  "ark-bn254",
  "ark-crypto-primitives",
- "ark-ec",
- "ark-ed-on-bn254",
  "ark-ff",
  "ark-groth16",
- "ark-poly",
  "ark-r1cs-std",
  "ark-relations",
  "ark-serialize",

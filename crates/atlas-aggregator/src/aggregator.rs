@@ -18,7 +18,7 @@ use atlas_zk::transition::BatchWitness;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::batch::{Batch, BatchBuilder};
 use crate::config::AggregatorConfig;
@@ -742,21 +742,8 @@ impl Aggregator {
                 }
             }
             Err(e) => {
-                // Benigne Dedup-Kollision ≠ Fehlschlag. Bei leeren Heartbeat-Batches
-                // ist die batch_id konstant (Calldata leer → konstante Merkle-Root),
-                // die Eindeutigkeit pro Settlement liefert im Konsens-Digest die
-                // pre_root. Reicht der Aggregator einen identischen, noch ungeminten
-                // Bid erneut ein (Timing-Überlappung mit dem vorigen), weist die
-                // Node-Mempool-Dedup ihn als Duplikat ab. Der bereits angenommene
-                // Batch wird ohnehin gemined; den Zähler `batches_failed` würde das
-                // nur mit Rauschen verfälschen. Daher: nur Debug-Log, kein set_failed.
-                if e.to_string().contains("Duplicate settlement batch") {
-                    debug!("Batch {} bereits beim Node pending (Dedup-Kollision) — übersprungen",
-                        &batch_id_hex[..16.min(batch_id_hex.len())]);
-                } else {
-                    warn!("Batch submission failed: {}", e);
-                    Self::set_failed(&state, &batch_id_hex, format!("submission failed: {}", e));
-                }
+                warn!("Batch submission failed: {}", e);
+                Self::set_failed(&state, &batch_id_hex, format!("submission failed: {}", e));
             }
         }
     }
