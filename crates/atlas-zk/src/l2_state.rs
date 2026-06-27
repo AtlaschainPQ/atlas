@@ -588,6 +588,44 @@ mod tests {
         assert_eq!(s.root_bytes(), crate::empty_l2_state_root());
     }
 
+    /// REPRODUKTION/GUARD (Incident 2026-06-27): Es gibt ZWEI Baum-Mutationspfade —
+    /// `apply()`/`apply_batch` (vom Aggregator zum Beweisen + Bid-Bauen) und
+    /// `apply_calldata()`/`apply_replay_fast` (vom Node in `apply_block` UND vom
+    /// Aggregator-Follower/Resync). Beide MÜSSEN für denselben Transfer EXAKT
+    /// dieselbe L2-Root liefern — besonders wenn der Transfer ein NEUES Empfänger-
+    /// konto anlegt (Index-Zuweisung!). Sonst divergieren Node- und Aggregator-Root
+    /// nach dem ersten echten Transfer (leere Heartbeats berühren keine Konten →
+    /// nie getriggert) und jeder Folge-Bid fällt als `pre_root does not chain` raus.
+    #[test]
+    fn apply_paths_agree_on_transfer_to_new_account() {
+        let alice_kp = kp(1);
+        let alice    = alice_kp.public().address20();
+        let bob      = [9u8; 20]; // existiert noch NICHT → wird neu angelegt
+
+        // Gemeinsamer Ausgangszustand.
+        let mut base = L2State::new();
+        base.credit(&alice, 1_000_000);
+        let snap = base.to_snapshot_bytes();
+
+        // Pfad A: apply() / apply_batch (signiert, wie der Aggregator-Bid).
+        let mut sa = L2State::from_snapshot_bytes(&snap).expect("snapshot A");
+        let tx = signed(&alice_kp, bob, 1000, 10, 0);
+        sa.apply(std::slice::from_ref(&tx)).expect("apply_batch ok");
+
+        // Pfad B: apply_calldata() / apply_replay_fast (unsigniert, wie Node+Follower).
+        let mut sb = L2State::from_snapshot_bytes(&snap).expect("snapshot B");
+        sb.apply_calldata(std::slice::from_ref(&tx.input)).expect("apply_calldata ok");
+
+        assert_eq!(
+            sa.root_bytes(), sb.root_bytes(),
+            "apply_batch und apply_replay_fast divergieren bei Transfer auf NEUES Konto \
+             → Node↔Aggregator-Root-Desync (Incident 2026-06-27)"
+        );
+        assert_eq!(sa.balance(&bob), 1000);
+        assert_eq!(sb.balance(&bob), 1000);
+        assert_eq!(sa.balance(&alice), 1_000_000 - 1010);
+    }
+
     #[test]
     fn credit_then_transfer() {
         let alice_kp = kp(1);

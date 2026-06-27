@@ -115,12 +115,28 @@ re-divergierte der Live-Follower.
   Block-Template (`pre_root does not chain`), **merkt es der Aggregator nie**
   (submitbatch hat den Bid akzeptiert) → keine Selbstheilung. Der Stall wäre
   sonst evtl. von selbst ausgeheilt.
-- **Status**: Root-Cause offen. Reproduktion erfordert einen Integrationstest
-  über Node **und** Aggregator-Follower mit der Sequenz *mehrere leere Blöcke →
-  Fee-Settlement → weitere Settlements*, der `pre_root` vor/nach jedem Schritt
-  vergleicht (der bestehende Echt-Groth16-E2E deckt nur einen einzelnen Übergang
-  ab). **Vor jedem weiteren Mainnet-Schritt zu klären** — ein Mainnet ohne echte
-  Transfers ist sinnlos, und genau die brechen aktuell die L2.
+- **Eingegrenzt (2026-06-27)**: Alle deterministischen State-Math-Ursachen
+  systematisch AUSGESCHLOSSEN:
+  - Emissions-Mathematik (bit-identisch, sauberer Rebuild).
+  - Transfer-Tree-Math inkl. Neukonto-Indizierung: die zwei Mutationspfade
+    `apply()`/`apply_batch` (Aggregator-Bid/Proving) und
+    `apply_calldata()`/`apply_replay_fast` (Node `apply_block` + Follower/Resync)
+    liefern identische Roots — Regressionstest
+    `apply_paths_agree_on_transfer_to_new_account` (atlas-zk). Konsistent damit,
+    dass Block 2153 akzeptiert wurde.
+  - `getl2snapshot` (per-Block has_settlement/calldata/credits) und der Follower
+    `apply_l2_block` sind strukturell konsistent zum Node.
+  → Verbleibender Verdacht: **operativer/Concurrency-Pfad**, nicht die State-Math.
+  Wahrscheinlich eine Race zwischen `flush_inner` (liest `state.l2` für die
+  Bid-`pre_root`) und `follow_chain` (rückt `state.l2` vor), oder die
+  `applied_height`-Logik des Followers nach einem Fee-Settlement.
+- **Status**: Root-Cause auf den operativen Pfad eingegrenzt, aber noch nicht
+  final gepinnt. Nächster Schritt: Reproduktion über Node **und**
+  Aggregator-Follower mit der Sequenz *mehrere leere Blöcke → Fee-Settlement →
+  weitere Settlements* (der Echt-Groth16-E2E deckt nur einen Einzelübergang ab),
+  ODER Live-Repro mit einem Transfer aus einem geförderten Konto. **Vor jedem
+  weiteren Mainnet-Schritt zu klären** — ein Mainnet ohne echte Transfers ist
+  sinnlos, und genau die brechen aktuell die L2.
 - **Akkumulator-Arbeit** liegt in der Git-Historie (Commit `3195866`, auf `main`
   via `c0be6c4` revertet) zur Wiederverwendung, sobald der Live-Desync gefixt ist.
 
