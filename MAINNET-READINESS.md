@@ -89,13 +89,33 @@ auf L2; die PoW-Emission wird direkt L2-Konten von Miner/Prover gutgeschrieben.
 - **Live verifiziert (2026-06-26)**: Settlements landen, Emission 200/Block auf
   L2, Heartbeat-Ausschüttung, Buchhaltung exakt (Sender/Empfänger/Miner-Fees
   konserviert). Whitepaper/README als implementiert dokumentiert.
+- **Live-Diagnose (2026-06-27)**: Testnet gesund (Account-Balance über Nacht
+  21k→161k ATL, Settlements laufen durch). Der Aggregator-Zähler `batches_failed`
+  war durch gutartiges Dedup-Rauschen verfälscht: leere Heartbeat-Batches haben
+  eine konstante `batch_id` (Calldata leer → konstante Merkle-Root), die
+  Eindeutigkeit pro Settlement liefert im Konsens-Digest die `pre_root`. Reicht
+  der Aggregator einen identischen, noch ungeminten Bid erneut ein, weist die
+  Node-Mempool-Dedup ihn als Duplikat ab. Fix: der Aggregator zählt eine
+  „Duplicate"-Antwort nicht mehr als Fehlschlag (konsens-neutral, nur Metrik).
 - **Adversariale Review (2026-06-26)**: Geld-Vektoren geprüft — keine
-  Über-Gutschrift (Schedule-gebunden), keine Doppel-Gutschrift (Walk-Back stoppt
-  am letzten Settlement, jeder Block genau einmal), Cap erzwungen, Fees
-  konserviert, leerer Block kann Root nicht ändern. Offener Perf-Hinweis: ein
-  Settlement nach SEHR vielen leeren Blöcken triggert einen O(Gap)-Walk-Back;
-  praktisch durch den Heartbeat (≤ 3 Blöcke) begrenzt — vor Mainnet als harte
-  Obergrenze festschreiben (Audit-Punkt).
+  Über-Gutschrift (Schedule-gebunden), keine Doppel-Gutschrift (jeder Block genau
+  einmal), Cap erzwungen, Fees konserviert, leerer Block kann Root nicht ändern.
+- **O(Gap)-Walk-Back beseitigt — Emissions-Akkumulator (2026-06-27)**: Früher
+  lief ein Settlement-Block den Storage rückwärts bis zum letzten Settlement ab,
+  um die aufgelaufene Emission der leeren Blöcke nachzutragen — O(Lücke) pro
+  Settlement und damit ein (milder) DoS-Vektor (viele leere Blöcke → ein teures
+  Settlement bei jedem validierenden Node). Jetzt führt der Node einen
+  reorg-/neustart-festen **Emissions-Akkumulator** (`pending_emission`): jeder
+  leere Block hängt seine Coinbase-Emission O(1) an, jedes Settlement verbraucht
+  und resettet ihn. Die gutgeschriebenen Beträge sind **bit-identisch** zum
+  früheren Walk-Back (gleiches `coinbase_credits_from`-Primitiv, Credits
+  kommutieren) → **keine Konsens-Spaltung**. Nach Reorg/Neustart wird der
+  Akkumulator einmalig rekonstruiert (`reconstruct_pending_emission`), der
+  Live-Pfad bleibt O(1). Damit ist der Audit-Punkt gelöst — nicht durch eine
+  Liveness-gefährdende harte Cap, sondern durch Eliminierung der unbegrenzten
+  Berechnung. Regressionstest `test_emission_accumulator_aggregates_by_address`;
+  der bestehende Echt-Groth16-E2E-Test deckt den Settlement-Pfad ab (eigene
+  Root-Assertion fängt jede Divergenz).
 
 ### Genesis-L2-Root-Fix (2026-06-14) — KRITISCH, war Launch-Blocker
 Auf einer frischen Chain startete der Node-State mit `EMPTY_L2_ROOT`, während

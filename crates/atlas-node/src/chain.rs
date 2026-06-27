@@ -59,6 +59,17 @@ struct Settlement {
     forced_rejections: Vec<atlas_core::transaction::ForcedRejection>,
 }
 
+/// Modell A: Effekt eines Blocks auf den Emissions-Akkumulator. Wird ERST nach
+/// dem Reorg-Snapshot angewandt, damit ein Rollback den Vorzustand sieht.
+enum EmissionUpdate {
+    /// Leerer Block: diese Coinbase-Emission läuft auf (anhängen).
+    Accrue(Vec<([u8; 20], u128)>),
+    /// Settlement-Block: aufgelaufene Emission wurde gutgeschrieben → zurücksetzen.
+    Reset,
+    /// Kein Akkumulator-Effekt (test_mode — Node führt keinen L2-Baum).
+    None,
+}
+
 /// Ereignisse die der ChainManager nach außen veröffentlicht
 #[derive(Clone, Debug)]
 pub enum ChainEvent {
@@ -93,6 +104,17 @@ pub struct ChainManager {
     /// `l2_state_root` pro Block korrekt herauskommt. Für Reorgs wird sein
     /// kompakter Snapshot (`to_snapshot_bytes`) im `StateSnapshot` mitgesichert.
     l2_state: parking_lot::RwLock<atlas_zk::l2_state::L2State>,
+    /// Modell A (Emissions-Akkumulator): die seit dem letzten Settlement
+    /// aufgelaufene, noch nicht gutgeschriebene Coinbase-Emission (pro
+    /// Empfänger-L2-Adresse aggregiert). Wird pro Block O(1) fortgeschrieben —
+    /// leerer Block: Block-Credit anhängen; Settlement-Block: verbrauchen + auf
+    /// leer zurücksetzen. Ersetzt den früheren O(Gap)-Walk-Back durch Storage
+    /// beim Settlement (DoS-Vektor: viele leere Blöcke → ein teures Settlement).
+    /// Die gutgeschriebenen Beträge sind bit-identisch zum Walk-Back (gleiche
+    /// `coinbase_credits_from`-Primitive, Credits kommutieren). Reorg-/Neustart-
+    /// fest durch Rekonstruktion (`reconstruct_pending_emission`) nach jedem
+    /// Rollback bzw. beim Start — kein Eintrag in den Per-Block-Snapshot nötig.
+    pending_emission: parking_lot::RwLock<Vec<([u8; 20], u128)>>,
 }
 
 impl ChainManager {
@@ -118,6 +140,8 @@ impl ChainManager {
             l2_state: parking_lot::RwLock::new(
                 atlas_zk::l2_state::L2State::from_genesis(&atlas_zk::genesis_allocation()),
             ),
+            // Frische Chain (Höhe 0): noch keine aufgelaufene Emission.
+            pending_emission: parking_lot::RwLock::new(Vec::new()),
         }
     }
 
@@ -435,6 +459,14 @@ impl ChainManager {
         // abgelehnt und der Node bliebe hängen.
         self.rebuild_l2_state_from_storage();
 
+        // Modell A: Auch den Emissions-Akkumulator nach dem Neustart rekonstruieren
+        // (die seit dem letzten Settlement aufgelaufene, noch nicht gutgeschriebene
+        // Emission). Einmalig — der Live-Pfad bleibt danach O(1).
+        {
+            let height = self.state.chain.read().height;
+            *self.pending_emission.write() = self.reconstruct_pending_emission(height);
+        }
+
         self
     }
 
@@ -750,6 +782,47 @@ impl ChainManager {
         credits
     }
 
+    /// Modell A: aggregiert Credits per Adresse in den Emissions-Akkumulator
+    /// (hält ihn klein — eine Zeile je distinkter Miner/Prover-Adresse statt zwei
+    /// je Block). Credits sind additiv → die Aggregation ist verlustfrei und
+    /// kommutiert mit der späteren `tree.credit`-Anwendung.
+    fn accrue_emission(acc: &mut Vec<([u8; 20], u128)>, credits: Vec<([u8; 20], u128)>) {
+        for (addr, amt) in credits {
+            if amt == 0 { continue; }
+            if let Some(e) = acc.iter_mut().find(|(a, _)| *a == addr) {
+                e.1 = e.1.saturating_add(amt);
+            } else {
+                acc.push((addr, amt));
+            }
+        }
+    }
+
+    /// Rekonstruiert den Emissions-Akkumulator für den Tip auf `height` aus dem
+    /// Storage: die Coinbase-Credits aller LEEREN Blöcke seit dem letzten
+    /// Settlement (inkl. `height`, falls dieser selbst leer ist). Ist `height`
+    /// ein Settlement-Block, ist der Akkumulator leer (dort wurde die aufgelaufene
+    /// Emission verbraucht und zurückgesetzt). Wird EINMALIG nach einem Rollback
+    /// (Reorg) bzw. beim Start aufgerufen — nicht im Per-Block-Live-Pfad. Damit
+    /// bleibt die laufende Block-Verarbeitung frei vom O(Gap)-Walk-Back.
+    fn reconstruct_pending_emission(&self, height: u64) -> Vec<([u8; 20], u128)> {
+        let mut acc = Vec::new();
+        let Some(store) = self.storage.as_ref() else { return acc };
+        let mut h = height;
+        while h >= 1 {
+            match store.load_block_by_height(h) {
+                Ok(Some(b)) => {
+                    if !Self::extract_settlements(&b.transactions).is_empty() {
+                        break; // Settlement erreicht — Akkumulator endet hier (exklusiv)
+                    }
+                    Self::accrue_emission(&mut acc, self.coinbase_credits_of_block(&b));
+                }
+                _ => break,
+            }
+            h -= 1;
+        }
+        acc
+    }
+
     fn apply_block(&self, block: Block, hash: Hash, height: u64) -> Result<(), ChainError> {
         // L2-State-Transition: soundness-tragende Verifikation der SettlementBids.
         // Jeder Bid trägt seinen eigenen Groth16-State-Transition-Beweis; die
@@ -791,13 +864,13 @@ impl ChainManager {
         //    gegen den Header prüfen. Die L2-Root rückt damit pro Block vor. Im
         //    test_mode (Dummy-Calldata) gilt die alte Semantik: Header ==
         //    Settlement-Root, keine L2-Gutschrift.
-        let (new_l2_tree, emission_subsidy) = if self.test_mode {
+        let (new_l2_tree, emission_subsidy, emission_update) = if self.test_mode {
             if block.header.l2_state_root != post_settle_root {
                 return Err(ChainError::Validation(ValidationError::ZkProofInvalid(
                     "header l2_state_root does not match settlement chain".to_string(),
                 )));
             }
-            (None, RewardSchedule::new(&self.params).subsidy_at(height).as_atom())
+            (None, RewardSchedule::new(&self.params).subsidy_at(height).as_atom(), EmissionUpdate::None)
         } else {
             let subsidy = RewardSchedule::new(&self.params).subsidy_at(height).as_atom();
             let mut tree = self.l2_state.read().clone();
@@ -816,7 +889,10 @@ impl ChainManager {
                         "block without settlements must keep L2 state root unchanged (batched coinbase)".to_string(),
                     )));
                 }
-                (None, subsidy)
+                // Akkumulator: die Emission dieses leeren Blocks läuft auf und wird
+                // beim nächsten Settlement gutgeschrieben. Commit nach dem Snapshot.
+                let accrued = self.coinbase_credits_from(block.header.height, &block.transactions);
+                (None, subsidy, EmissionUpdate::Accrue(accrued))
             } else {
                 // Transfers (bewiesen) anwenden → Settlement-Root.
                 for s in &settlements {
@@ -831,10 +907,16 @@ impl ChainManager {
                         "node L2 tree root != settlement chain root".to_string(),
                     )));
                 }
-                // Aufgelaufene Coinbase-Emission nativ gutschreiben: dieser
-                // Settlement-Block + alle vorausgehenden LEEREN Blöcke seit dem
-                // letzten Settlement (Credits sind additiv → kommutieren).
-                for (addr, amt) in self.pending_coinbase_credits(block.header.height, &block.transactions) {
+                // Aufgelaufene Coinbase-Emission nativ gutschreiben: der
+                // Emissions-Akkumulator (alle LEEREN Blöcke seit dem letzten
+                // Settlement) PLUS dieser Settlement-Block selbst. Credits sind
+                // additiv → kommutieren; das Ergebnis ist bit-identisch zum
+                // früheren O(Gap)-Walk-Back durch den Storage, aber O(1) statt
+                // O(Lücke) — kein DoS durch viele leere Blöcke vor einem Settlement.
+                let mut credits = self.pending_emission.read().clone();
+                Self::accrue_emission(&mut credits,
+                    self.coinbase_credits_from(block.header.height, &block.transactions));
+                for (addr, amt) in credits {
                     if amt > 0 { tree.credit(&addr, amt); }
                 }
                 if tree.root_bytes() != block.header.l2_state_root.0 {
@@ -842,7 +924,7 @@ impl ChainManager {
                         "node L2 tree root != header l2_state_root (Modell A gebündelt)".to_string(),
                     )));
                 }
-                (Some(tree), subsidy)
+                (Some(tree), subsidy, EmissionUpdate::Reset)
             }
         };
 
@@ -933,6 +1015,19 @@ impl ChainManager {
         let l2_changed = new_l2_tree.is_some();
         if let Some(tree) = new_l2_tree {
             *self.l2_state.write() = tree;
+        }
+
+        // Modell A: Emissions-Akkumulator fortschreiben. `pre_snapshot` wurde
+        // bereits VOR dieser Mutation gebaut und hält den Vorzustand des L2-Baums;
+        // ein Reorg-Rollback rekonstruiert den Akkumulator ohnehin frisch
+        // (`reconstruct_pending_emission`), daher liegt er nicht im Snapshot.
+        match emission_update {
+            EmissionUpdate::Accrue(credits) => {
+                let mut pe = self.pending_emission.write();
+                Self::accrue_emission(&mut pe, credits);
+            }
+            EmissionUpdate::Reset => self.pending_emission.write().clear(),
+            EmissionUpdate::None => {}
         }
 
         // Snapshot speichern
@@ -1055,6 +1150,7 @@ impl ChainManager {
         let pre_reorg_chain      = self.state.chain.read().clone();
         let pre_reorg_snap_count = self.snapshots.read().len();
         let pre_reorg_l2         = self.l2_state.read().to_snapshot_bytes();
+        let pre_reorg_pending    = self.pending_emission.read().clone();
 
         // ── Rollback zum Fork-Punkt ──────────────────────────────────────────
         // Schneller Pfad: In-Memory-Snapshot am Fork-Punkt. Fehlt er (Snapshots
@@ -1108,12 +1204,18 @@ impl ChainManager {
                     if let Some(st) = atlas_zk::l2_state::L2State::from_snapshot_bytes(&pre_reorg_l2) {
                         *self.l2_state.write() = st;
                     }
+                    *self.pending_emission.write() = pre_reorg_pending.clone();
                     self.snapshots.write().truncate(pre_reorg_snap_count);
                     return Err(e);
                 }
                 // rebuild_state_to lässt self.state exakt auf fork_at_height.
             }
         }
+
+        // Modell A: Emissions-Akkumulator für den Fork-Punkt rekonstruieren, BEVOR
+        // die Fork-Blöcke angewandt werden (ihr `apply_block` schreibt ihn dann
+        // wieder forward fort). Greift für beide Rollback-Pfade (Snapshot + Rebuild).
+        *self.pending_emission.write() = self.reconstruct_pending_emission(fork_at_height);
 
         // Neuen Fork anwenden — bei Fehler: zurück auf ursprüngliche Kette
         fork_blocks.push(block);
@@ -1131,6 +1233,7 @@ impl ChainManager {
                 if let Some(st) = atlas_zk::l2_state::L2State::from_snapshot_bytes(&pre_reorg_l2) {
                     *self.l2_state.write() = st;
                 }
+                *self.pending_emission.write() = pre_reorg_pending.clone();
                 // Snapshot-Manager zurücksetzen: fork-Snapshots entfernen
                 self.snapshots.write().truncate(pre_reorg_snap_count);
                 return Err(e);
@@ -1200,6 +1303,9 @@ impl ChainManager {
         // apply_block baut ihn beim Replay wieder auf.
         *self.l2_state.write() =
             atlas_zk::l2_state::L2State::from_genesis(&atlas_zk::genesis_allocation());
+        // Emissions-Akkumulator ebenfalls leeren — das Replay via apply_block baut
+        // ihn frisch auf; sonst würde auf veraltetem Stand weiterakkumuliert.
+        self.pending_emission.write().clear();
         self.snapshots.write().truncate(0);
 
         // Aktive Kette via Standard-apply_block neu anwenden → self.state steht
@@ -1264,6 +1370,29 @@ mod tests {
         let state   = Arc::new(StateDb::new());
         let mempool = Arc::new(Mempool::new(params.clone()));
         Arc::new(ChainManager::new(params, state, mempool, true))
+    }
+
+    /// Modell A (Emissions-Akkumulator): `accrue_emission` aggregiert Credits
+    /// verlustfrei per Adresse. Die Summe je Empfänger ist identisch, ob pro
+    /// leerem Block einzeln oder beim Settlement gebündelt eingebucht — Credits
+    /// kommutieren. Das ist die Invariante, die den O(1)-Akkumulator bit-identisch
+    /// zum früheren O(Gap)-Walk-Back macht.
+    #[test]
+    fn test_emission_accumulator_aggregates_by_address() {
+        let a = [1u8; 20];
+        let b = [2u8; 20];
+        let mut acc = Vec::new();
+        // Drei "leere Blöcke": a bekommt 3×100, b 1×50.
+        ChainManager::accrue_emission(&mut acc, vec![(a, 100)]);
+        ChainManager::accrue_emission(&mut acc, vec![(a, 100), (b, 50)]);
+        ChainManager::accrue_emission(&mut acc, vec![(a, 100)]);
+        // Null-Credits werden ignoriert (kein Akkumulator-Bloat).
+        ChainManager::accrue_emission(&mut acc, vec![(b, 0)]);
+
+        assert_eq!(acc.len(), 2, "pro Adresse genau ein Eintrag");
+        let sum = |addr: [u8; 20]| acc.iter().find(|(x, _)| *x == addr).map(|(_, v)| *v).unwrap_or(0);
+        assert_eq!(sum(a), 300);
+        assert_eq!(sum(b), 50);
     }
 
     /// Inflations-Schutz (Modell A): Die Coinbase-Emissions-Gutschrift entspricht
