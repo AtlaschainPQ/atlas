@@ -5,6 +5,7 @@ use super::message::{InvItem, P2pMessage, PROTOCOL_VERSION};
 use super::peer::{spawn_peer, Peer};
 use super::tls::TlsConfig;
 use crate::chain::{ChainEvent, ChainManager};
+use atlas_core::block::Block;
 use atlas_core::hash::Hash;
 use atlas_mempool::mempool::Mempool;
 use parking_lot::RwLock;
@@ -24,6 +25,10 @@ const MAX_ADDR_ITEMS: usize = 1_000;
 /// Maximale Anzahl Objekte pro GetData-Request (verhindert DoS)
 const MAX_GETDATA_ITEMS: usize = 500;
 
+/// Obergrenze des Orphan-Puffers (out-of-order IBD-Blöcke) — DoS-Schutz: ein
+/// Peer könnte sonst beliebig viele nicht-anschließende Blöcke einspeisen.
+const MAX_ORPHANS: usize = 20_000;
+
 pub struct P2pNetwork {
     chain:       Arc<ChainManager>,
     mempool:     Arc<Mempool>,
@@ -34,6 +39,11 @@ pub struct P2pNetwork {
     tls:         Arc<TlsConfig>,
     stop:        Arc<AtomicBool>,
     max_peers:   usize,
+    /// Out-of-order IBD-Blöcke: Block, dessen Parent noch NICHT bekannt ist,
+    /// zwischengespeichert keyed by Parent-Hash. Beim Eintreffen des Parents wird
+    /// der wartende Block in Reihenfolge angewandt (verhindert, dass beim IBD
+    /// nebenläufig gelieferte Blöcke als Orphan durchfallen → 1-Block-pro-Zyklus).
+    orphans:     Arc<RwLock<HashMap<Hash, Box<Block>>>>,
 }
 
 impl P2pNetwork {
@@ -55,6 +65,7 @@ impl P2pNetwork {
             tls:         Arc::new(tls),
             stop:        Arc::new(AtomicBool::new(false)),
             max_peers,
+            orphans:     Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -271,38 +282,11 @@ impl P2pNetwork {
             }
 
             P2pMessage::Block(block) => {
-                let hash  = block.hash();
-                let chain = self.chain.clone();
-                let net   = self.clone();
-                let addr  = peer.addr;
-                tokio::spawn(async move {
-                    match tokio::task::spawn_blocking(move || chain.process_block(*block)).await {
-                        Ok(Ok(())) => {
-                            net.bans.adjust_score(addr.ip(), SCORE_VALID_BLOCK);
-                            net.gossip_to_others(
-                                P2pMessage::Inv(vec![InvItem::Block(hash)]),
-                                Some(addr),
-                            );
-                        }
-                        Ok(Err(e)) => {
-                            use crate::chain::ChainError;
-                            match &e {
-                                ChainError::AlreadyKnown(_) => {
-                                    net.bans.adjust_score(addr.ip(), SCORE_DUPLICATE);
-                                }
-                                ChainError::Validation(_) | ChainError::Execution(_) => {
-                                    net.bans.adjust_score(addr.ip(), SCORE_INVALID_BLOCK);
-                                    warn!("Invalid block from {} (score={}): {}", addr, net.bans.score(addr.ip()), e);
-                                }
-                                // Vorübergehende Orphans während Fork-Download sind
-                                // erwartbar (Blöcke kommen nebenläufig, ggf. vor ihrem
-                                // Parent an) und heilen über IBD-Re-Requests → debug.
-                                _ => debug!("Block from {} not applied: {}", addr, e),
-                            }
-                        }
-                        Err(_) => warn!("Block processing task panicked for peer {}", addr),
-                    }
-                });
+                // Out-of-order-fester Eingang: parent bekannt → anwenden + wartende
+                // Kinder in Reihenfolge nachziehen; parent unbekannt → puffern.
+                let net  = self.clone();
+                let addr = peer.addr;
+                tokio::spawn(async move { net.ingest_block(block, addr).await; });
             }
 
             P2pMessage::Tx(tx) => {
@@ -448,6 +432,66 @@ impl P2pNetwork {
             if locator.len() > 10 { step *= 2; }
         }
         locator
+    }
+
+    /// Verarbeitet einen eingehenden Block out-of-order-fest. Ist der Parent noch
+    /// nicht bekannt, wird der Block (keyed by Parent-Hash) gepuffert und beim
+    /// Eintreffen des Parents in Reihenfolge angewandt. So fallen beim IBD
+    /// nebenläufig gelieferte Blöcke nicht mehr als Orphan durch (Durchsatz statt
+    /// ~1 Block pro Re-Request-Zyklus). `process_block` ist intern serialisiert
+    /// (process_lock) → keine Doppel-Anwendung bei nebenläufigen Tasks.
+    async fn ingest_block(self: Arc<Self>, block: Box<Block>, from: SocketAddr) {
+        let parent = block.header.prev_hash;
+        if !self.chain.state().is_block_known(&parent) {
+            {
+                let mut orph = self.orphans.write();
+                if orph.len() >= MAX_ORPHANS {
+                    debug!("Orphan-Puffer voll — Block von {} verworfen", from);
+                    return;
+                }
+                orph.insert(parent, block);
+            }
+            // Race: der Parent landete genau zwischen Check und Insert? Dann den
+            // eben gepufferten Block sofort nachziehen (sonst bliebe er liegen).
+            if self.chain.state().is_block_known(&parent) {
+                let pending = self.orphans.write().remove(&parent); // Guard hier fallen lassen
+                if let Some(b) = pending {
+                    Box::pin(self.clone().ingest_block(b, from)).await;
+                }
+            }
+            return;
+        }
+
+        // Parent bekannt → diesen Block und dann seine wartende Nachfolgekette
+        // (`orphans[hash]`) in Reihenfolge anwenden.
+        let mut next = Some(block);
+        while let Some(b) = next.take() {
+            let hash  = b.hash();
+            let chain = self.chain.clone();
+            match tokio::task::spawn_blocking(move || chain.process_block(*b)).await {
+                Ok(Ok(())) => {
+                    self.bans.adjust_score(from.ip(), SCORE_VALID_BLOCK);
+                    self.gossip_to_others(P2pMessage::Inv(vec![InvItem::Block(hash)]), Some(from));
+                    next = self.orphans.write().remove(&hash);
+                }
+                Ok(Err(e)) => {
+                    use crate::chain::ChainError;
+                    match &e {
+                        ChainError::AlreadyKnown(_) => {
+                            self.bans.adjust_score(from.ip(), SCORE_DUPLICATE);
+                            // Block ist vorhanden → ein wartendes Kind trotzdem nachziehen.
+                            next = self.orphans.write().remove(&hash);
+                        }
+                        ChainError::Validation(_) | ChainError::Execution(_) => {
+                            self.bans.adjust_score(from.ip(), SCORE_INVALID_BLOCK);
+                            warn!("Invalid block from {} (score={}): {}", from, self.bans.score(from.ip()), e);
+                        }
+                        _ => debug!("Block from {} not applied: {}", from, e),
+                    }
+                }
+                Err(_) => warn!("Block processing task panicked for peer {}", from),
+            }
+        }
     }
 
     fn headers_since(&self, locator: &[Hash]) -> Vec<atlas_core::block::BlockHeader> {

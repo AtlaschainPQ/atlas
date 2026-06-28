@@ -218,20 +218,25 @@ bricht der Join.
   Fenster → ging.) Fix: gemeinsamen Vorfahren aus dem Locator bestimmen (RAM ODER
   Storage) und Header ab dort aus dem **Storage** (vollständige Kette) liefern.
   Deployt; verifiziert: node2 rückt jetzt vor (0 → 3 → …, vorher hart 0).
-- **Bug 3 — IBD-Block-Download out-of-order, Durchsatz ~1 Block/Zyklus (OFFEN)**:
-  Mit Bug-2-Fix synct node2, aber nur ~1 Block pro 30-s-Zyklus (≈ 40 h für 5000
-  Blöcke → praktisch unbrauchbar). Ursache: der `P2pMessage::Block`-Handler
-  **spawnt pro eingehendem Block einen eigenen Task** — bei 2000 gelieferten
-  Blöcken laufen sie nebenläufig OUT-OF-ORDER; nur der nächste-in-Reihe (Parent
-  bekannt) wird angewandt, der Rest fällt als Orphan durch (KEIN Puffer, nur
-  Debug-Log „heilen über IBD-Re-Requests"). Fix: **Orphan-Puffer** (eingehende
-  Blöcke ohne bekannten Parent zwischenspeichern und beim Eintreffen des Parents
-  in Reihenfolge anwenden) ODER geordnete IBD-Verarbeitung. Konsens-naher Umbau —
-  als eigener fokussierter Schritt zu machen.
-  → **Der Join-Pfad ist damit halb da**: ein frischer Node KANN jetzt syncen
-  (Bug 1+2 gefixt), aber nicht in praktikabler Zeit (Bug 3 offen). Vor dem
-  Einladen Externer zu fixen. Test-Setup: systemd-Dienst `atlas-node2`
-  (Ports 18335/18336, Datadir `~/.atlas-node2`, Config `~/node2.json`).
+- **Bug 3 — IBD-Block-Download out-of-order verworfen (GEFIXT + deployt)**: Der
+  `P2pMessage::Block`-Handler spawnte pro Block einen Task → nebenläufig gelieferte
+  Blöcke liefen OUT-OF-ORDER; nur der nächste-in-Reihe wurde angewandt, der Rest
+  fiel als Orphan durch (kein Puffer) → ~1 Block pro 30-s-Stall-Zyklus. Fix:
+  **Orphan-Puffer** (`P2pNetwork::orphans`, keyed by Parent-Hash, Cap 20k):
+  Block ohne bekannten Parent wird gepuffert und beim Eintreffen des Parents in
+  Reihenfolge nachgezogen (`ingest_block`, race-frei via Re-Check; `process_block`
+  ist intern serialisiert → keine Doppel-Anwendung). Deployt auf node2;
+  verifiziert: **stetiger Fortschritt OHNE Stall/Rotate** (Höhe klettert
+  durchgehend, 0 Stalls).
+- **Bug 4 — IBD-Bulk-Lieferung gedrosselt, ~1 Block/2,5 s (OFFEN, Optimierung)**:
+  Mit Bug 1–3 gefixt synct ein frischer Node **stetig**, aber nur ~1 Block/2,5 s
+  (≈ 3,5 h für 5000 Blöcke). Der GetHeaders→Headers→GetData→Block-Pfad liefert pro
+  Runde nur wenige statt der bis zu 2000 angeforderten Blöcke (Ursache noch nicht
+  isoliert — IBD-Tick=5 s, evtl. GetData-Serving oder `want`-Filterung). KEIN
+  Korrektheitsbug, nur Durchsatz; für ein angenehmes Onboarding zu optimieren.
+  → **Der Join funktioniert jetzt** (frischer Node synct verlässlich), nur noch
+  nicht schnell. Test-Setup: systemd-Dienst `atlas-node2` (Ports 18335/18336,
+  Datadir `~/.atlas-node2`, Config `~/node2.json`).
 - **Betriebs-Notiz**: `atlas-aggregator` ist via systemd an `atlas-node` gekoppelt
   (`stop atlas-node` stoppt den Aggregator mit) — bei Node-Deploys den Aggregator
   danach mit-neustarten.
