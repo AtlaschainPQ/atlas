@@ -123,12 +123,21 @@ stand ~4,5 h. Rollback auf das Vor-Binary → sofortige Erholung.
   liegt also im **Live-/Operativ-Pfad** des Akkumulator-Codes, nicht in den
   gutgeschriebenen Werten — und ist VOR einem erneuten Deploy offline (auf
   Branch) zu reproduzieren und zu fixen.
-- **Separat festgehaltene Robustheits-Schwäche**: fällt ein Bid still aus dem
-  Block-Template (`pre_root does not chain`), merkt es der Aggregator nie
-  (submitbatch hat ihn akzeptiert) → keine Selbstheilung. Im aktuellen Betrieb
-  unkritisch (kein Desync), aber ein guter Härtungspunkt: der Aggregator sollte
-  erkennen, wenn sein Bid nicht innerhalb von N Blöcken gemined wird, und neu
-  synchronisieren.
+- **Separat festgehaltene Robustheits-Schwäche — User-TX-Verlust unter
+  Contention (2026-06-27, live demonstriert)**: Reicht der Aggregator ein
+  Settlement mit User-TXs ein, während (kurz davor) ein Heartbeat-Settlement mit
+  DERSELBEN `pre_root` in Flight ist, kann nur eines gemined werden; das andere
+  fällt still aus dem Block-Template (`pre_root does not chain`). Die User-TXs im
+  gedroppten Batch werden aus dem Builder entnommen (`builder.take()`) und NICHT
+  neu eingereiht → **verloren**. Live beobachtet beim Faucet-Test: erste TX
+  (1a1a) verloren, zweite (2b2b) settelte (gewann ihr Race) → intermittierend.
+  Die L2 stallt dabei NICHT (Heartbeats heilen sich selbst). **Fix**: in einen
+  Batch genommene User-TXs erst nach BESTÄTIGUNG (Settlement im Block gesehen)
+  endgültig entfernen; bei Nicht-Bestätigung (Root rückt ohne diesen Batch vor)
+  neu einreihen. Wahrscheinlich derselbe `pre_root`-Kollisions-Mechanismus, den
+  der Akkumulator zu einem permanenten Stall verschärft hat — daher der beste
+  Ansatzpunkt, beide Probleme gemeinsam zu lösen. Vor öffentlichem Testnet mit
+  echten Nutzer-Transfers zu fixen.
 - **Repro-Werkzeug**: `print_signed_submit_tx` (atlas-zk, `#[ignore]`) signiert
   byte-identisch zur Web-Wallet und druckt die `/submit`-JSON aus ENV-Parametern.
 

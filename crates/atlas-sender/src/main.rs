@@ -50,6 +50,14 @@ struct Config {
     sender_index: u64,      // Konto-Index im L2-Baum (Bezug für Rejections)
     nonce_base:   u64,      // Bulk-Modus: Start-Nonce je Sender (für Dauer-Last)
     print_addrs:  bool,     // nur Sender-Adressen ausgeben und beenden
+    /// Faucet-Modus: EINE TX aus einem konkreten (geförderten) Secret an eine
+    /// konkrete L2-Adresse; die Nonce wird automatisch vom Aggregator (/account)
+    /// geholt. `--url` zeigt auf den Aggregator. Der Förderpfad für ein
+    /// Fair-Launch-Testnet (kein Premine) — der Betreiber finanziert aus
+    /// geschürftem Guthaben.
+    fund:         bool,
+    secret_hex:   String,   // 32-Byte-Hex des geförderten Absenders
+    to_hex:       String,   // 20-Byte-Hex der Empfängeradresse
 }
 
 impl Default for Config {
@@ -69,6 +77,9 @@ impl Default for Config {
             sender_index: 0,
             nonce_base:   0,
             print_addrs:  false,
+            fund:         false,
+            secret_hex:   String::new(),
+            to_hex:       String::new(),
         }
     }
 }
@@ -94,6 +105,9 @@ fn parse_args() -> Config {
             "--index"    if i+1 < args.len() => { cfg.sender_index = args[i+1].parse().unwrap_or(0); i += 2; }
             "--nonce-base" if i+1 < args.len() => { cfg.nonce_base = args[i+1].parse().unwrap_or(0); i += 2; }
             "--print-addrs"                  => { cfg.print_addrs = true;                          i += 1; }
+            "--fund"                         => { cfg.fund     = true;                               i += 1; }
+            "--secret"   if i+1 < args.len() => { cfg.secret_hex = args[i+1].clone();               i += 2; }
+            "--to"       if i+1 < args.len() => { cfg.to_hex   = args[i+1].clone();                 i += 2; }
             "--help" | "-h" => {
                 eprintln!("atlas-sender — High-Throughput L2 TX Sender");
                 eprintln!("  --url      <host:port>  Aggregator-Adresse    (Standard: 127.0.0.1:8080)");
@@ -113,6 +127,13 @@ fn parse_args() -> Config {
                 eprintln!("  --index    <N>          Konto-Index im Baum   (Standard: 0)");
                 eprintln!("  Beispiel: atlas-sender --force --url 127.0.0.1:18634 \\");
                 eprintln!("            --seed 0xA71A5003 --nonce 0 --index 4 --amount 100");
+                eprintln!();
+                eprintln!("Faucet (Fair-Launch-Testnet: aus geschürftem Guthaben fördern):");
+                eprintln!("  --fund                  EINE TX aus --secret an --to (Nonce auto)");
+                eprintln!("  --secret   <hex32>      Geförderter Absender (32-Byte-Hex)");
+                eprintln!("  --to       <hex20>      Empfänger-L2-Adresse (20-Byte-Hex)");
+                eprintln!("  Beispiel: atlas-sender --fund --url 127.0.0.1:8080 \\");
+                eprintln!("            --secret 0f93.. --to abab..(20B) --amount 1000000 --fee 5");
                 std::process::exit(0);
             }
             _ => { i += 1; }
@@ -157,6 +178,30 @@ async fn http_post(host: &str, path: &str, body: &[u8]) -> anyhow::Result<String
     }
 }
 
+/// Einfacher GET host/path → Response-Body.
+async fn http_get(host: &str, path: &str) -> anyhow::Result<String> {
+    let mut stream = TcpStream::connect(host).await?;
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        path, host
+    );
+    stream.write_all(request.as_bytes()).await?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await?;
+    let resp_str = String::from_utf8_lossy(&response);
+    if let Some(pos) = resp_str.find("\r\n\r\n") {
+        Ok(resp_str[pos + 4..].to_string())
+    } else {
+        Ok(resp_str.to_string())
+    }
+}
+
+fn parse_hex_array<const N: usize>(s: &str, what: &str) -> anyhow::Result<[u8; N]> {
+    let v = hex::decode(s.trim().trim_start_matches("0x").trim_start_matches("ATL:"))
+        .map_err(|e| anyhow::anyhow!("{what}: kein Hex: {e}"))?;
+    v.as_slice().try_into().map_err(|_| anyhow::anyhow!("{what} muss {N} Byte sein"))
+}
+
 // ── Kern-Logik ────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -191,6 +236,33 @@ async fn main() -> anyhow::Result<()> {
         println!("Forced Inclusion: from={} nonce={} → Node {}",
             hex::encode(from), cfg.nonce, cfg.url);
         let resp = http_post(&cfg.url, "/", body.as_bytes()).await?;
+        println!("Antwort: {}", resp.trim());
+        return Ok(());
+    }
+
+    // ── Faucet-Modus: eine TX aus --secret an --to (Nonce auto vom Aggregator) ──
+    if cfg.fund {
+        let secret = parse_hex_array::<32>(&cfg.secret_hex, "--secret")?;
+        let to     = parse_hex_array::<20>(&cfg.to_hex, "--to")?;
+        let kp     = EddsaKeypair::from_secret_bytes(&secret);
+        let from   = kp.public().address20();
+
+        // Aktuelle Nonce des Absenders vom Aggregator holen (/account/<hex20>).
+        let acct = http_get(&cfg.url, &format!("/account/{}", hex::encode(from))).await?;
+        let nonce = serde_json::from_str::<serde_json::Value>(&acct)
+            .ok()
+            .and_then(|v| v["nonce"].as_u64())
+            .ok_or_else(|| anyhow::anyhow!("Nonce nicht aus /account lesbar: {}", acct.trim()))?;
+
+        let (from2, pubkey, sig) = build_l2_eddsa(&kp, &to, cfg.amount, cfg.fee, nonce);
+        debug_assert_eq!(from, from2);
+        let tx = L2Transaction::from_parts(
+            Address(from2), Address(to), cfg.amount, cfg.fee, nonce, pubkey, sig);
+        let body = serde_json::to_vec(&tx)?;
+
+        println!("Faucet: {} → {}  ({} ATOM, fee {}, nonce {})",
+            hex::encode(from), hex::encode(to), cfg.amount, cfg.fee, nonce);
+        let resp = http_post(&cfg.url, "/submit", &body).await?;
         println!("Antwort: {}", resp.trim());
         return Ok(());
     }
