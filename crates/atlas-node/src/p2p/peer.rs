@@ -135,10 +135,15 @@ where
         tokens      = (tokens + elapsed * RATE_LIMIT_PER_SEC).min(RATE_LIMIT_PER_SEC);
         last_refill = now;
 
-        // 1 Token pro Nachricht — bei 0 Tokens: disconnect
+        // 1 Token pro Nachricht. Bei leerem Bucket DROSSELN statt trennen: ein
+        // legitimer Burst (v.a. IBD-Block-Download bei langer Kette) darf die
+        // Verbindung nicht killen. Der Durchsatz bleibt auf RATE_LIMIT_PER_SEC
+        // gedeckelt (Backpressure via TCP-Flow-Control) — ein Spammer wird so
+        // gedrosselt statt belohnt; tote/lahme Verbindungen fängt IDLE_TIMEOUT ab.
         if tokens < 1.0 {
-            warn!("Peer {}: rate limit exceeded, disconnecting", addr);
-            break;
+            let wait = ((1.0 - tokens) / RATE_LIMIT_PER_SEC).min(1.0);
+            tokio::time::sleep(std::time::Duration::from_secs_f64(wait)).await;
+            continue; // Loop-Anfang füllt Tokens anhand der verstrichenen Zeit nach
         }
         tokens -= 1.0;
 

@@ -195,6 +195,34 @@ Dabei gefundene und gefixte Bugs (jeder hätte ein offenes Netz am Tag 1 in eine
    der Fork-Punkt-Zustand durch Neu-Abspielen der aktiven Kette von Genesis über
    dieselbe `apply_block`-Logik rekonstruiert (selten, nur Reorg-nach-Neustart).
 
+### ⚠️ Open-Testnet-Join NICHT funktionsfähig (2026-06-28)
+Beim Versuch, einen **frischen zweiten Node** per IBD an das laufende Testnet
+(~4950 Blöcke) anzuschließen, traten ZWEI Probleme zutage. Der frühere
+3-Node-Test (2026-06-13) lief auf einer kurzen Kette; mit der gewachsenen Kette
+bricht der Join.
+- **Bug 1 — P2P-Rate-Limit killt IBD (GEFIXT + deployt)**: Der per-Verbindung-
+  Token-Bucket (`RATE_LIMIT_PER_SEC=200`, `p2p/peer.rs`) machte bei leerem Bucket
+  einen **harten Disconnect** statt zu drosseln. Ein legitimer IBD-Burst (lange
+  Kette) leerte den Bucket in ~120 ms → die Verbindung wurde getrennt, bevor der
+  Sync lief. Fix: **drosseln statt trennen** (sleep bis Token frei; Durchsatz
+  bleibt gedeckelt, Backpressure via TCP; tote Verbindungen fängt IDLE_TIMEOUT).
+  Auf Seed UND zweitem Node deployt — der Disconnect ist weg, „IBD start" wird
+  erreicht.
+- **Bug 2 — IBD stallt trotzdem bei Höhe 0 (OFFEN)**: Mit dem Fix auf beiden
+  Seiten verbindet sich der zweite Node, aber der Block-/Header-Austausch kommt
+  NICHT zustande: node2 meldet „IBD stalled at height 0, rotating sync peer", der
+  Seed sieht den Inbound-Connect, aber keinen `getheaders`-Request/keine
+  Auslieferung. Vermutlich ein Connect-Zeit-Nachrichten-/Handshake-Problem (der
+  Seed schickte vor dem Fix ~200 Nachrichten in 120 ms — evtl. unsolicited
+  Gossip/Flood, der den eigentlichen Sync verdrängt). **Noch nicht root-caused.**
+  → **Der Join-Pfad funktioniert aktuell NICHT** — ein neuer Node kann nicht
+  syncen. Harte Voraussetzung fürs öffentliche Testnet; vor dem Einladen Externer
+  zu fixen. Test-Setup: systemd-Dienst `atlas-node2` (Ports 18335/18336, Datadir
+  `~/.atlas-node2`, Config `~/node2.json`) auf dem Server.
+- **Betriebs-Notiz**: `atlas-aggregator` ist via systemd an `atlas-node` gekoppelt
+  (`stop atlas-node` stoppt den Aggregator mit) — bei Node-Deploys den Aggregator
+  danach mit-neustarten.
+
 ### Mainnet-Code-Bausteine (2026-06-14)
 - **Genesis-Allokation dateibasiert**: `crates/atlas-zk/genesis/alloc.json`
   (`[{address,balance}]`) ist die EINZIGE Quelle, via `include_str!` in alle
