@@ -208,17 +208,30 @@ bricht der Join.
   bleibt gedeckelt, Backpressure via TCP; tote Verbindungen fängt IDLE_TIMEOUT).
   Auf Seed UND zweitem Node deployt — der Disconnect ist weg, „IBD start" wird
   erreicht.
-- **Bug 2 — IBD stallt trotzdem bei Höhe 0 (OFFEN)**: Mit dem Fix auf beiden
-  Seiten verbindet sich der zweite Node, aber der Block-/Header-Austausch kommt
-  NICHT zustande: node2 meldet „IBD stalled at height 0, rotating sync peer", der
-  Seed sieht den Inbound-Connect, aber keinen `getheaders`-Request/keine
-  Auslieferung. Vermutlich ein Connect-Zeit-Nachrichten-/Handshake-Problem (der
-  Seed schickte vor dem Fix ~200 Nachrichten in 120 ms — evtl. unsolicited
-  Gossip/Flood, der den eigentlichen Sync verdrängt). **Noch nicht root-caused.**
-  → **Der Join-Pfad funktioniert aktuell NICHT** — ein neuer Node kann nicht
-  syncen. Harte Voraussetzung fürs öffentliche Testnet; vor dem Einladen Externer
-  zu fixen. Test-Setup: systemd-Dienst `atlas-node2` (Ports 18335/18336, Datadir
-  `~/.atlas-node2`, Config `~/node2.json`) auf dem Server.
+- **Bug 2 — `headers_since` lieferte nur aus dem RAM-Fenster (GEFIXT + deployt)**:
+  Der GetHeaders-Handler (`p2p/network.rs`) bediente sich ausschließlich aus
+  `recent_headers` (begrenzt auf `MAX_RECENT_HEADERS=2016`). Bei einer Kette
+  > 2016 liegt der Genesis außerhalb des Fensters → der Locator eines frischen
+  Nodes (Genesis-Hash) wird nicht gefunden → `unwrap_or(0)` schickt Header aus der
+  MITTE der Kette, die nicht an den Genesis des Joiners anschließen → Stall bei
+  Höhe 0. (Der 3-Node-Test 2026-06-13 lief auf < 2016 Blöcken → Genesis noch im
+  Fenster → ging.) Fix: gemeinsamen Vorfahren aus dem Locator bestimmen (RAM ODER
+  Storage) und Header ab dort aus dem **Storage** (vollständige Kette) liefern.
+  Deployt; verifiziert: node2 rückt jetzt vor (0 → 3 → …, vorher hart 0).
+- **Bug 3 — IBD-Block-Download out-of-order, Durchsatz ~1 Block/Zyklus (OFFEN)**:
+  Mit Bug-2-Fix synct node2, aber nur ~1 Block pro 30-s-Zyklus (≈ 40 h für 5000
+  Blöcke → praktisch unbrauchbar). Ursache: der `P2pMessage::Block`-Handler
+  **spawnt pro eingehendem Block einen eigenen Task** — bei 2000 gelieferten
+  Blöcken laufen sie nebenläufig OUT-OF-ORDER; nur der nächste-in-Reihe (Parent
+  bekannt) wird angewandt, der Rest fällt als Orphan durch (KEIN Puffer, nur
+  Debug-Log „heilen über IBD-Re-Requests"). Fix: **Orphan-Puffer** (eingehende
+  Blöcke ohne bekannten Parent zwischenspeichern und beim Eintreffen des Parents
+  in Reihenfolge anwenden) ODER geordnete IBD-Verarbeitung. Konsens-naher Umbau —
+  als eigener fokussierter Schritt zu machen.
+  → **Der Join-Pfad ist damit halb da**: ein frischer Node KANN jetzt syncen
+  (Bug 1+2 gefixt), aber nicht in praktikabler Zeit (Bug 3 offen). Vor dem
+  Einladen Externer zu fixen. Test-Setup: systemd-Dienst `atlas-node2`
+  (Ports 18335/18336, Datadir `~/.atlas-node2`, Config `~/node2.json`).
 - **Betriebs-Notiz**: `atlas-aggregator` ist via systemd an `atlas-node` gekoppelt
   (`stop atlas-node` stoppt den Aggregator mit) — bei Node-Deploys den Aggregator
   danach mit-neustarten.

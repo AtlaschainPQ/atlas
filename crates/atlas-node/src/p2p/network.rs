@@ -451,15 +451,52 @@ impl P2pNetwork {
     }
 
     fn headers_since(&self, locator: &[Hash]) -> Vec<atlas_core::block::BlockHeader> {
-        let chain = self.chain.state().chain.read();
-        let known: HashSet<Hash> = locator.iter().copied().collect();
-        let start_pos = chain.recent_headers.iter()
-            .position(|h| known.contains(&h.hash()))
-            .unwrap_or(0);
-        chain.recent_headers.iter()
-            .skip(start_pos + 1)
-            .take(2000)
-            .cloned()
-            .collect()
+        // Gemeinsamen Vorfahren bestimmen: der höchste Locator-Hash, den WIR
+        // kennen (Locator ist tip→genesis geordnet). Erst im RAM-Fenster, dann im
+        // STORAGE suchen — sonst kann ein frischer Node nie syncen: liegt der
+        // Genesis außerhalb des `recent_headers`-Fensters (Kette > MAX_RECENT_
+        // HEADERS=2016), wird der Vorfahre nicht gefunden und es kämen Header aus
+        // der Mitte der Kette, die nicht an den Genesis des Joiners anschließen.
+        let storage = self.chain.storage_arc();
+        let mut start_height: u64 = 0;
+        'find: for h in locator {
+            {
+                let chain = self.chain.state().chain.read();
+                if let Some(hdr) = chain.recent_headers.iter().find(|x| x.hash() == *h) {
+                    start_height = hdr.height;
+                    break 'find;
+                }
+            }
+            if let Some(store) = storage.as_ref() {
+                if let Ok(Some(hdr)) = store.load_header(h) {
+                    start_height = hdr.height;
+                    break 'find;
+                }
+            }
+        }
+
+        let tip = self.chain.height();
+        // Header ab `start_height + 1` (max 2000) — bevorzugt aus dem Storage
+        // (vollständige Kette ab Genesis), damit auch ein Node bei Höhe 0 syncen kann.
+        if let Some(store) = storage.as_ref() {
+            let mut out = Vec::new();
+            let mut height = start_height + 1;
+            while height <= tip && out.len() < 2000 {
+                match store.load_header_by_height(height) {
+                    Ok(Some(hdr)) => out.push(hdr),
+                    _ => break,
+                }
+                height += 1;
+            }
+            out
+        } else {
+            // Kein Storage (z.B. Test-/RAM-Only-Node): Fallback auf das Fenster.
+            let chain = self.chain.state().chain.read();
+            let known: HashSet<Hash> = locator.iter().copied().collect();
+            let start_pos = chain.recent_headers.iter()
+                .position(|h| known.contains(&h.hash()))
+                .unwrap_or(0);
+            chain.recent_headers.iter().skip(start_pos + 1).take(2000).cloned().collect()
+        }
     }
 }
