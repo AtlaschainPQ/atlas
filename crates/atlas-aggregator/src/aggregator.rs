@@ -209,6 +209,14 @@ struct AggregatorState {
     /// `pre_root` des zuletzt geflushten Batches — Gate gegen das Bauen mehrerer
     /// Batches gegen dieselbe (noch unbestätigte) Root.
     last_flush_root: Option<[u8; 32]>,
+    /// Verlust-Schutz: die User-TXs des zuletzt submitteten Batches + dessen
+    /// `pre_root`. Wird der Batch gedroppt (Settlement nicht gemined — z.B. Race
+    /// mit einem Heartbeat gleicher `pre_root`: nur eines kann gemined werden),
+    /// reiht der Follower (bzw. der nächste Flush) die noch NICHT angewendeten
+    /// TXs neu ein, statt sie zu verlieren. „Angewendet" = Sender-Nonce im
+    /// bestätigten `l2` ist über `tx.nonce` hinaus.
+    inflight_user_txs: Vec<L2Transaction>,
+    inflight_pre_root: Option<[u8; 32]>,
 }
 
 /// Mindest-Wartezeit für einen erneuten Flush gegen UNVERÄNDERTE Root (Retry,
@@ -279,6 +287,8 @@ impl Aggregator {
             l2,
             applied_height:  0,
             last_flush_root: None,
+            inflight_user_txs: Vec::new(),
+            inflight_pre_root: None,
         }));
 
         Ok(Aggregator {
@@ -406,6 +416,28 @@ impl Aggregator {
                 let mut s = self.state.lock();
                 s.l2 = trial;
                 s.applied_height = new_applied;
+                // Verlust-Schutz: in einen submitteten Batch genommene User-TXs,
+                // die nach diesem Update NICHT angewendet wurden (Nonce nicht
+                // verbraucht) UND deren Batch-`pre_root` nicht mehr die aktuelle
+                // Root ist (→ Settlement wurde gedroppt, z.B. Race mit einem
+                // Heartbeat gleicher pre_root), zurück in den Builder statt sie
+                // zu verlieren. Idempotent mit dem Drain im Flush.
+                if !s.inflight_user_txs.is_empty()
+                    && s.inflight_pre_root != Some(s.l2.root_bytes())
+                {
+                    let inflight = std::mem::take(&mut s.inflight_user_txs);
+                    s.inflight_pre_root = None;
+                    let mut requeued = 0u32;
+                    for tx in inflight {
+                        if s.l2.nonce(&tx.from.0) <= tx.nonce {
+                            s.builder.push(tx);
+                            requeued += 1;
+                        }
+                    }
+                    if requeued > 0 {
+                        warn!("Follower: {} nicht bestätigte User-TX(s) neu eingereiht (Settlement gedroppt).", requeued);
+                    }
+                }
             }
         }
     }
@@ -564,6 +596,20 @@ impl Aggregator {
             let mut state = self.state.lock();
             state.last_flush = Instant::now();
 
+            // Verlust-Schutz: ein vorheriger in-Flight-Batch, dessen Settlement
+            // gedroppt wurde (die Root rückte ohne ihn vor), zuerst zurück in den
+            // Builder — sonst gingen seine TXs beim Neu-Batchen verloren.
+            // Idempotent mit dem Follower (wer zuerst läuft, leert `inflight`).
+            if !state.inflight_user_txs.is_empty()
+                && state.inflight_pre_root != Some(state.l2.root_bytes())
+            {
+                let stale = std::mem::take(&mut state.inflight_user_txs);
+                state.inflight_pre_root = None;
+                for tx in stale {
+                    if state.l2.nonce(&tx.from.0) <= tx.nonce { state.builder.push(tx); }
+                }
+            }
+
             // Forced-Einträge gegen den aktuellen L2-State klassifizieren.
             let (forced_txs, rejections) = classify_forced(&state.l2, &forced_entries, max_bs);
             if !forced_txs.is_empty() || !rejections.is_empty() {
@@ -575,6 +621,7 @@ impl Aggregator {
             // User-TXs bis zur Kapazität; Überhang zurück in den Builder.
             let user_txs: Vec<L2Transaction> = state.builder.take()
                 .map(|b| b.transactions).unwrap_or_default();
+            let forced_len = forced_txs.len();
             let mut combined = forced_txs;
             let mut leftover = Vec::new();
             for tx in user_txs {
@@ -601,11 +648,13 @@ impl Aggregator {
                     transactions: combined,
                     total_fees,
                 };
-                Some((batch, rejections))
+                // User-TX-Anteil (nach dem Forced-Präfix) für den Verlust-Schutz.
+                let user_in_batch = batch.transactions[forced_len..].to_vec();
+                Some((batch, rejections, user_in_batch))
             }
         };
 
-        let Some((batch, rejections)) = work else { return };
+        let Some((batch, rejections, user_in_batch)) = work else { return };
 
         info!(
             "Flushing batch: {} TXs, {} ATOM fees",
@@ -640,6 +689,11 @@ impl Aggregator {
                 Ok(w) => {
                     let post_root = trial.root_bytes();
                     state.last_flush_root = Some(pre_root); // Gate gegen Doppel-Flush
+                    // Verlust-Schutz scharf schalten: diese User-TXs gegen diese
+                    // pre_root sind jetzt in Flight. Bei Drop (Root rückt ohne sie
+                    // vor) reiht der Follower / der nächste Flush sie neu ein.
+                    state.inflight_user_txs = user_in_batch;
+                    state.inflight_pre_root = Some(pre_root);
                     state.batches.insert(batch_id_hex.clone(), BatchRecord {
                         batch_id:     batch_id_hex.clone(),
                         tx_count:     batch.transactions.len() as u32,
@@ -702,11 +756,13 @@ impl Aggregator {
             Ok(Err(e))  => {
                 error!("ZK state proof failed: {}", e);
                 Self::set_failed(&state, &batch_id_hex, format!("ZK state proof failed: {}", e));
+                Self::requeue_inflight_for(&state, &pre_root); // Batch erreicht Node nie → TXs retten
                 return;
             }
             Err(e) => {
                 error!("ZK prove task panicked: {}", e);
                 Self::set_failed(&state, &batch_id_hex, "prove task panicked".into());
+                Self::requeue_inflight_for(&state, &pre_root);
                 return;
             }
         };
@@ -744,6 +800,7 @@ impl Aggregator {
             Err(e) => {
                 warn!("Batch submission failed: {}", e);
                 Self::set_failed(&state, &batch_id_hex, format!("submission failed: {}", e));
+                Self::requeue_inflight_for(&state, &pre_root); // Node nahm Batch nicht → TXs retten
             }
         }
     }
@@ -753,6 +810,25 @@ impl Aggregator {
         s.stats.batches_failed += 1;
         if let Some(rec) = s.batches.get_mut(batch_id) {
             rec.status = BatchStatus::Failed { reason };
+        }
+    }
+
+    /// Verlust-Schutz für Fehlerpfade: erreichte ein Batch den Node nie (Prove-
+    /// /Submit-Fehler), rückt die Root nicht vor → der pre_root-Guard in
+    /// Follower/Flush greift nicht. Hier reihen wir die noch nicht angewendeten
+    /// in-Flight-User-TXs explizit neu ein. Nur, wenn `inflight` noch zu DIESEM
+    /// Batch gehört (gleiche pre_root) — sonst hat ihn schon jemand aufgelöst.
+    fn requeue_inflight_for(state: &Mutex<AggregatorState>, expect_pre_root: &[u8; 32]) {
+        let mut s = state.lock();
+        if s.inflight_pre_root != Some(*expect_pre_root) { return; }
+        let inflight = std::mem::take(&mut s.inflight_user_txs);
+        s.inflight_pre_root = None;
+        let mut requeued = 0u32;
+        for tx in inflight {
+            if s.l2.nonce(&tx.from.0) <= tx.nonce { s.builder.push(tx); requeued += 1; }
+        }
+        if requeued > 0 {
+            warn!("{} nicht eingereichte User-TX(s) neu eingereiht (Batch erreichte Node nicht).", requeued);
         }
     }
 
@@ -855,6 +931,60 @@ mod tests {
         let (txs2, rejs2) = classify_forced(&l2, &[e2], 16);
         assert_eq!(txs2.len(), 1, "gültige TX wird auch bei falschem Index aufgenommen");
         assert!(rejs2.is_empty(), "kein Zensur-Schlupfloch über falschen Index");
+    }
+
+    /// Verlust-Schutz (Re-Queue-Logik): eine in-Flight-User-TX, deren Settlement
+    /// gedroppt wurde (Sender-Nonce im bestätigten `l2` NICHT verbraucht), gehört
+    /// zurück in den Builder. Wurde sie hingegen angewendet (Nonce vorgerückt),
+    /// darf sie NICHT neu eingereiht werden — sonst Double-Spend.
+    #[test]
+    fn test_requeue_inflight_unconfirmed_vs_confirmed() {
+        use std::sync::Arc;
+        use parking_lot::Mutex;
+        use atlas_zk::l2_state::L2Input;
+        use crate::l2_tx::L2Transaction;
+        use atlas_core::crypto::Address;
+
+        let kp   = EddsaKeypair::from_seed(0xA71A_5009);
+        let from = kp.public().address20();
+        let to   = [0xABu8; 20];
+        let l2   = L2State::from_genesis(&[GenesisAlloc { address: from, balance: 1_000_000 }]);
+        let old_root = [9u8; 32]; // pre_root des (gedroppten) Batches
+
+        let (f, pubkey, sig) = build_l2_eddsa(&kp, &to, 100, 5, 0);
+        let tx = L2Transaction::from_parts(Address(f), Address(to), 100, 5, 0, pubkey, sig);
+
+        let mk = |l2: L2State| Arc::new(Mutex::new(AggregatorState {
+            builder: BatchBuilder::new(16),
+            batches: std::collections::HashMap::new(),
+            last_flush: std::time::Instant::now(),
+            stats: AggregatorStats::default(),
+            l2,
+            applied_height: 0,
+            last_flush_root: None,
+            inflight_user_txs: vec![tx.clone()],
+            inflight_pre_root: Some(old_root),
+        }));
+
+        // Fall A: nicht angewendet (Konto-Nonce 0 == tx.nonce) → Re-Queue.
+        let st = mk(l2.clone());
+        Aggregator::requeue_inflight_for(&st, &old_root);
+        {
+            let s = st.lock();
+            assert!(s.inflight_user_txs.is_empty(), "inflight nach Re-Queue geleert");
+            assert_eq!(s.builder.len(), 1, "nicht bestätigte TX zurück im Builder");
+        }
+
+        // Fall B: angewendet (Nonce vorgerückt auf 1) → KEIN Re-Queue.
+        let mut l2b = l2.clone();
+        l2b.apply_calldata(&[L2Input { from: f, to, amount: 100, fee: 5, nonce: 0 }]).unwrap();
+        let st2 = mk(l2b);
+        Aggregator::requeue_inflight_for(&st2, &old_root);
+        {
+            let s = st2.lock();
+            assert!(s.inflight_user_txs.is_empty());
+            assert_eq!(s.builder.len(), 0, "bestätigte TX wird NICHT neu eingereiht (kein Double-Spend)");
+        }
     }
 
     /// Eine Forced-TX mit veralteter Nonce (Konto schon weiter) ist gegen den

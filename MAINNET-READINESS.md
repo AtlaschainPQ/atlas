@@ -131,13 +131,24 @@ stand ~4,5 h. Rollback auf das Vor-Binary → sofortige Erholung.
   gedroppten Batch werden aus dem Builder entnommen (`builder.take()`) und NICHT
   neu eingereiht → **verloren**. Live beobachtet beim Faucet-Test: erste TX
   (1a1a) verloren, zweite (2b2b) settelte (gewann ihr Race) → intermittierend.
-  Die L2 stallt dabei NICHT (Heartbeats heilen sich selbst). **Fix**: in einen
-  Batch genommene User-TXs erst nach BESTÄTIGUNG (Settlement im Block gesehen)
-  endgültig entfernen; bei Nicht-Bestätigung (Root rückt ohne diesen Batch vor)
-  neu einreihen. Wahrscheinlich derselbe `pre_root`-Kollisions-Mechanismus, den
-  der Akkumulator zu einem permanenten Stall verschärft hat — daher der beste
-  Ansatzpunkt, beide Probleme gemeinsam zu lösen. Vor öffentlichem Testnet mit
-  echten Nutzer-Transfers zu fixen.
+  Die L2 stallt dabei NICHT (Heartbeats heilen sich selbst).
+  - **GEFIXT + deployt (2026-06-27)**: Verlust-Schutz im Aggregator. Die User-TXs
+    eines submitteten Batches + dessen `pre_root` werden als „in Flight" gemerkt.
+    Rückt die bestätigte Root vor, ohne dass diese TXs angewendet wurden
+    (Sender-Nonce im `l2` nicht über `tx.nonce` hinaus → Settlement gedroppt),
+    reiht der Follower / der nächste Flush / der Fehlerpfad sie neu in den Builder
+    ein statt sie zu verlieren; der Nonce-Check verhindert Double-Spend bei bereits
+    bestätigten TXs. Idempotent (mehrere Re-Queue-Pfade, alle `pre_root`-gegated).
+    Regressionstest `test_requeue_inflight_unconfirmed_vs_confirmed`. Live nach
+    Deploy: 11/11 Faucet-Transfers gesettelt (inkl. erzwungener Heartbeat-Race-
+    Injektion), keine Regression. Der Re-Queue ist ein Backstop für seltene
+    Durchrutscher — das bestehende `last_flush_root`-Gate verhindert die Kollision
+    meist schon, daher live schwer gezielt auslösbar; die Logik ist per Unit-Test
+    abgesichert.
+  - Hinweis: vermutlich derselbe `pre_root`-Kollisions-Mechanismus, den der
+    Akkumulator zu einem *permanenten* Stall verschärft hat. Der Backstop
+    adressiert das User-TX-Symptom; der eigentliche Akkumulator-Live-Bug bleibt
+    separat offline zu reproduzieren, falls der Akkumulator je erneut versucht wird.
 - **Repro-Werkzeug**: `print_signed_submit_tx` (atlas-zk, `#[ignore]`) signiert
   byte-identisch zur Web-Wallet und druckt die `/submit`-JSON aus ENV-Parametern.
 
