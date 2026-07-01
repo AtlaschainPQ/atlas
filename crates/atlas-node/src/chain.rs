@@ -362,11 +362,24 @@ impl ChainManager {
         let mut kept        = Vec::with_capacity(txs.len());
         let mut settlements = Vec::new();
         let mut count: u32  = 0;
+        // Stale Bids nicht nur überspringen, sondern aus dem Mempool EVICTEN.
+        // Sonst Livelock (live beobachtet, 2026-07-01): ein Bid mit veralteter
+        // pre_root wird nie gemined, bleibt aber liegen — und die Mempool-Dedup
+        // (ein Bid je batch_id; leere Heartbeats haben eine KONSTANTE batch_id)
+        // weist jeden Nachfolger als Duplikat ab → Settlements stehen für immer.
+        // Eviction released die Dedup; der Aggregator-Retry (frische pre_root)
+        // wird angenommen → Selbstheilung. pre_root rückt nur vorwärts, ein
+        // nicht-anschließender Bid wird also nie wieder gültig (bei Reorgs
+        // resubmittet der Aggregator ohnehin). Im seltenen Fall einer verkehrten
+        // Mempool-Reihenfolge verketteter Bids wird höchstens ein noch gültiger
+        // Bid mit-evicted — kostet nur einen Resubmit, keine Korrektheit.
+        let mut evict: Vec<atlas_core::transaction::TxId> = Vec::new();
         for tx in txs {
             match &tx.tx_type {
                 TxType::SettlementBid { pre_root, post_root, .. } => {
                     if Hash(*pre_root.as_bytes()) != cur {
-                        warn!("Dropping SettlementBid from template: pre_root does not chain");
+                        warn!("Dropping SettlementBid from template: pre_root does not chain — evicting from mempool");
+                        evict.push(tx.txid());
                         continue;
                     }
                     // Forced-Regeln simulieren: verletzt der Bid die Fälligkeits-
@@ -394,6 +407,10 @@ impl ChainManager {
                 }
                 _ => kept.push(tx),
             }
+        }
+        // Stale Bids aus dem Mempool entfernen (released die batch_id-Dedup).
+        if !evict.is_empty() {
+            self.mempool.remove_confirmed(&evict);
         }
         // Settlements ans Ende anhängen (Reihenfolge der Kette bleibt erhalten)
         let settle_data = Self::extract_settlements(&settlements);
@@ -1264,6 +1281,58 @@ mod tests {
         let state   = Arc::new(StateDb::new());
         let mempool = Arc::new(Mempool::new(params.clone()));
         Arc::new(ChainManager::new(params, state, mempool, true))
+    }
+
+    /// Livelock-Regression (live beobachtet 2026-07-01): Ein SettlementBid mit
+    /// veralteter `pre_root` wird vom Block-Template gedroppt, blieb aber im
+    /// Mempool liegen — und die Bid-Dedup (ein Bid je batch_id; leere Heartbeats
+    /// haben eine KONSTANTE batch_id) wies jeden Nachfolger als Duplikat ab →
+    /// Settlements standen dauerhaft. Fix: der Template-Drop EVICTED den stale
+    /// Bid aus dem Mempool → Dedup released → ein frischer Bid derselben
+    /// batch_id wird wieder angenommen (Selbstheilung).
+    #[test]
+    fn test_stale_bid_evicted_from_mempool_releases_dedup() {
+        use atlas_core::amount::Amount;
+        use atlas_core::crypto::Address;
+        use atlas_core::transaction::Transaction;
+        use atlas_core::tx_stamp::TxStamp;
+
+        let params  = ConsensusParams::mainnet();
+        let min_fee = params.min_fee_atom;
+        let state   = Arc::new(StateDb::new());
+        let mempool = Arc::new(Mempool::new(params.clone()));
+        let chain   = Arc::new(ChainManager::new(params, state, mempool.clone(), true));
+
+        let mk_bid = |pre_root: Hash| -> Transaction {
+            let mut tx = Transaction::new_settlement_bid(
+                Hash::sha256(b"heartbeat"), // KONSTANTE batch_id (wie leere Heartbeats)
+                Address([2u8; 20]),
+                Amount::from_atom(50),
+                pre_root,
+                Hash::sha256(b"post"),
+                Hash::zero(),
+                0,
+                Vec::new(), Vec::new(), Vec::new(),
+            );
+            tx.fee       = Amount::from_atom(min_fee);
+            tx.timestamp = 0;
+            let txid = tx.txid();
+            tx.stamp = Some(TxStamp::mine(&txid, 12).expect("stamp"));
+            tx
+        };
+
+        // Stale Bid (pre_root=0 ≠ GENESIS_L2_ROOT) einreichen → liegt im Mempool.
+        mempool.submit(mk_bid(Hash::zero())).expect("stale Bid kommt in den Mempool");
+
+        // Template bauen → Drop + EVICTION (der Kern des Fixes).
+        let kp = KeyPair::generate();
+        let _template = chain.block_template(kp.address, kp.address);
+
+        // Ohne Eviction: DuplicateBatch. Mit Fix: Dedup released → Bid mit
+        // DERSELBEN batch_id (frische pre_root) wird wieder angenommen.
+        let cur = chain.state().chain.read().l2_state_root;
+        mempool.submit(mk_bid(cur))
+            .expect("nach Template-Eviction muss dieselbe batch_id wieder einreichbar sein");
     }
 
     /// Inflations-Schutz (Modell A): Die Coinbase-Emissions-Gutschrift entspricht

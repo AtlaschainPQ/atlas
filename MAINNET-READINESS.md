@@ -97,6 +97,24 @@ auf L2; die PoW-Emission wird direkt L2-Konten von Miner/Prover gutgeschrieben.
   praktisch durch den Heartbeat (≤ 3 Blöcke) begrenzt — vor Mainnet als harte
   Obergrenze festschreiben (Audit-Punkt).
 
+### Settlement-Livelock durch stale Bid im Mempool (2026-07-01, GEFIXT + deployt)
+**Vorbestehender Liveness-Bug, live auf dem bekannt-guten Binary beobachtet**
+(Settlements standen ~600 Blöcke): Ein SettlementBid mit veralteter `pre_root`
+wird vom Block-Template zwar gedroppt („pre_root does not chain"), blieb aber im
+Mempool liegen. Da leere Heartbeat-Batches eine KONSTANTE `batch_id` haben, wies
+die Mempool-Dedup (ein Bid je batch_id, Release erst bei Bestätigung) **jeden**
+neuen Heartbeat als „Duplicate settlement batch" ab → permanenter Livelock ohne
+Selbstheilung. Fix: der Template-Drop **evicted** den stale Bid aus dem Mempool
+(`assemble_l2_template` → `remove_confirmed`), das released die Dedup; der
+Aggregator-Retry mit frischer `pre_root` wird angenommen → Selbstheilung binnen
+Sekunden. Konsens-neutral (nur Mempool-/Miner-Pfad). Regressionstest
+`test_stale_bid_evicted_from_mempool_releases_dedup`.
+
+**Rückwirkende Einordnung des Akkumulator-Incidents**: derselbe Mechanismus
+erklärt, warum damals der Stall permanent war und der Binary-Rollback „heilte" —
+der Node-NEUSTART leerte den Mempool (nicht das alte Binary an sich). Der
+Akkumulator hat die pre_root-Kollision nur wahrscheinlicher gemacht.
+
 ### Akkumulator-Regression: L2-Stall bei Fee-Settlement (2026-06-27, REVERTET)
 **Aktueller Stand ist NICHT betroffen** — diese Regression existierte nur im
 deployten Akkumulator-Binary (Commit `3195866`) und wurde via `c0be6c4`
