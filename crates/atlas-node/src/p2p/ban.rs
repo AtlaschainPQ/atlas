@@ -36,15 +36,28 @@ impl PeerRecord {
 
 pub struct PeerBanManager {
     records: RwLock<HashMap<IpAddr, PeerRecord>>,
+    /// Operator-konfigurierte Seeds: NIE bannen. Live-Incident 2026-07-03:
+    /// node2 bannte seinen einzigen Seed (Duplicate-Strafen im IBD, Score -101
+    /// in 21 s) und war danach 24 h isoliert — ohne Seed kein Sync, kein Relay.
+    whitelist: RwLock<std::collections::HashSet<IpAddr>>,
 }
 
 impl PeerBanManager {
     pub fn new() -> Self {
-        PeerBanManager { records: RwLock::new(HashMap::new()) }
+        PeerBanManager {
+            records:   RwLock::new(HashMap::new()),
+            whitelist: RwLock::new(std::collections::HashSet::new()),
+        }
+    }
+
+    /// Nimmt eine IP dauerhaft vom Banning aus (konfigurierte Seed-Nodes).
+    pub fn whitelist(&self, ip: IpAddr) {
+        self.whitelist.write().insert(ip);
     }
 
     /// Gibt true zurück wenn die IP gerade gebannt ist
     pub fn is_banned(&self, ip: IpAddr) -> bool {
+        if self.whitelist.read().contains(&ip) { return false; }
         self.records.read()
             .get(&ip)
             .map(|r| r.is_banned())
@@ -53,6 +66,7 @@ impl PeerBanManager {
 
     /// Passt den Score an; bannt automatisch bei Unterschreitung des Schwellwerts
     pub fn adjust_score(&self, ip: IpAddr, delta: i32) {
+        if self.whitelist.read().contains(&ip) { return; }
         let mut records = self.records.write();
         let record = records.entry(ip).or_insert_with(PeerRecord::new);
 

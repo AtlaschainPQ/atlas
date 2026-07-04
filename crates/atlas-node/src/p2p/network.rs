@@ -1,6 +1,6 @@
 //! P2P Netzwerk-Manager
 
-use super::ban::{PeerBanManager, SCORE_VALID_BLOCK, SCORE_INVALID_BLOCK, SCORE_VALID_TX, SCORE_DUPLICATE, SCORE_INVALID_MSG};
+use super::ban::{PeerBanManager, SCORE_VALID_BLOCK, SCORE_INVALID_BLOCK, SCORE_VALID_TX, SCORE_INVALID_MSG};
 use super::message::{InvItem, P2pMessage, PROTOCOL_VERSION};
 use super::peer::{spawn_peer, Peer};
 use super::tls::TlsConfig;
@@ -76,6 +76,14 @@ impl P2pNetwork {
         }
     }
 
+    /// Operator-konfigurierte Seeds vom Banning ausnehmen — ein Node, der seinen
+    /// einzigen Seed bannt, ist dauerhaft isoliert (live passiert, 2026-07-03).
+    pub fn whitelist_ips(&self, addrs: &[SocketAddr]) {
+        for a in addrs {
+            self.bans.whitelist(a.ip());
+        }
+    }
+
     pub async fn start(self: &Arc<Self>, bind_addr: &str) -> anyhow::Result<()> {
         let listener = TcpListener::bind(bind_addr).await?;
         info!("P2P listening on {} (TLS)", bind_addr);
@@ -116,7 +124,10 @@ impl P2pNetwork {
         let sock_addr: SocketAddr = addr.parse()?;
 
         if self.bans.is_banned(sock_addr.ip()) {
-            return Ok(());
+            // Err statt still Ok: der Seed-Wächter loggte sonst "connected",
+            // obwohl nie gewählt wurde (live 2026-07-03: Node hielt sich 24 h
+            // für verbunden, während der Seed gebannt war).
+            anyhow::bail!("peer {} is banned", sock_addr.ip());
         }
 
         {
@@ -140,7 +151,12 @@ impl P2pNetwork {
         let tls_stream  = connector.connect(server_name, tcp).await?;
         info!("TLS established with {}", sock_addr);
 
-        self.clone().handle_connection(tls_stream, sock_addr).await;
+        // Connection-Lifecycle als eigener Task — NICHT awaiten. Vorher übernahm
+        // der Aufrufer (z.B. der Seed-Wächter) die gesamte Verbindungslebensdauer:
+        // sein "connected"-Log erschien erst beim VerbindungsENDE, und ein
+        // Cancel/Timeout des Aufrufers hätte die Verbindung mitgerissen.
+        let net = self.clone();
+        tokio::spawn(async move { net.handle_connection(tls_stream, sock_addr).await; });
         Ok(())
     }
 
@@ -310,10 +326,25 @@ impl P2pNetwork {
             }
 
             P2pMessage::Headers(headers) => {
-                let want: Vec<Hash> = headers.iter()
-                    .filter(|h| !self.chain.state().is_block_known(&h.hash()))
-                    .map(|h| h.hash())
-                    .collect();
+                // Nicht anfordern, was schon da ist: weder angewandte Blöcke noch
+                // solche, die bereits im Orphan-Puffer auf ihren Parent warten
+                // (Lookup über den Parent-Key, O(1)). Ohne diesen Filter forderte
+                // jeder 5-s-IBD-Tick dieselben ~2000 Blöcke erneut an → Re-Delivery-
+                // Sturm (Bandbreite, AlreadyKnown-Rauschen — live 2026-07-03 sogar
+                // Duplicate-Strafen bis zum Seed-Selbst-Ban).
+                let want: Vec<Hash> = {
+                    let orph = self.orphans.read();
+                    headers.iter()
+                        .filter(|h| {
+                            let hash = h.hash();
+                            let buffered = orph.get(&h.prev_hash)
+                                .map(|b| b.hash() == hash)
+                                .unwrap_or(false);
+                            !buffered && !self.chain.state().is_block_known(&hash)
+                        })
+                        .map(|h| h.hash())
+                        .collect()
+                };
                 if !want.is_empty() {
                     // Paralleler Block-Download: Hashes auf alle verbundenen Peers verteilen.
                     // Jeder Peer bekommt max. CHUNK_SIZE Blöcke — verhindert Single-Peer-Bottleneck.
@@ -478,8 +509,11 @@ impl P2pNetwork {
                     use crate::chain::ChainError;
                     match &e {
                         ChainError::AlreadyKnown(_) => {
-                            self.bans.adjust_score(from.ip(), SCORE_DUPLICATE);
-                            // Block ist vorhanden → ein wartendes Kind trotzdem nachziehen.
+                            // KEINE Strafe: Re-Delivery bereits bekannter Blöcke ist im
+                            // IBD normal (Re-Requests/Gossip überlappen). Duplicate-
+                            // Strafen haben live (2026-07-03) den eigenen Seed in 21 s
+                            // auf -101 gebracht → 24-h-Selbst-Isolation.
+                            // Ein wartendes Kind trotzdem nachziehen.
                             next = self.orphans.write().remove(&hash);
                         }
                         ChainError::Validation(_) | ChainError::Execution(_) => {

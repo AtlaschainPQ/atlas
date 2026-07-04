@@ -176,8 +176,23 @@ where
 
         match decode_message(&buf) {
             Ok(msg) => {
-                if let P2pMessage::Version { height: h, .. } = &msg {
-                    height.store(*h, Ordering::Relaxed);
+                // Peer-Höhe frisch halten — nicht nur beim Version-Handshake.
+                // Eine nur-einmal gesetzte Höhe veraltet über lange Verbindungen;
+                // IBD rechnet den Gap dann gegen einen stalen Wert und hält sich
+                // fälschlich für synced (Freeze-Baustein im Incident 2026-07-03).
+                match &msg {
+                    P2pMessage::Version { height: h, .. } => {
+                        height.store(*h, Ordering::Relaxed);
+                    }
+                    P2pMessage::Block(b) => {
+                        height.fetch_max(b.header.height, Ordering::Relaxed);
+                    }
+                    P2pMessage::Headers(hs) => {
+                        if let Some(max) = hs.iter().map(|h| h.height).max() {
+                            height.fetch_max(max, Ordering::Relaxed);
+                        }
+                    }
+                    _ => {}
                 }
                 debug!("← {} from {}", msg.name(), addr);
                 if in_tx.send(msg).is_err() { break; }

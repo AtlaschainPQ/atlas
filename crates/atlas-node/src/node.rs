@@ -190,6 +190,10 @@ impl AtlasNode {
         // Ohne Retry bliebe der Node dauerhaft isoliert (kein IBD, kein Relay).
         if !self.config.seed_nodes.is_empty() {
             let seeds = self.config.seed_nodes.clone();
+            // Seeds sind Operator-Vertrauen: nie bannen (sonst Selbst-Isolation).
+            let seed_socks: Vec<std::net::SocketAddr> =
+                seeds.iter().filter_map(|s| s.parse().ok()).collect();
+            p2p.whitelist_ips(&seed_socks);
             let p2p2  = p2p.clone();
             tokio::spawn(async move {
                 let mut delay = tokio::time::Duration::from_secs(2);
