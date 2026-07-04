@@ -264,6 +264,19 @@ bricht der Join.
   Diagnose-Weg: Stack-Dump (alle Worker idle → kein Deadlock) + Journal-Forensik
   (Ban-Zeile 21:28:15). Test-Setup: systemd-Dienst `atlas-node2` (Ports
   18335/18336, Datadir `~/.atlas-node2`, Config `~/node2.json`).
+- **Bug 5 — TRIAD-Verifier pro Block neu gebaut, ~2,4 s/Block (GEFIXT,
+  2026-07-04)**: Nach dem Selbst-Isolations-Fix synct node2 wieder, aber nur
+  23 Blöcke/min — Debug-Messung: Lieferung 31 Blöcke/s, Anwendung 0,4/s → der
+  Engpass war die ANWENDUNG. `process_block` konstruierte für jeden Block einen
+  frischen `TriadVerifier`; dessen `new_for_verification` generiert den
+  memory-harden Ableitungs-Cache (~2,4 s bei Produktions-Config) — pro Block!
+  Das drosselte nicht nur den IBD, sondern auch das Block-Processing des
+  Miners selbst (erklärt die realen ~27 s/Block statt 3-s-Ziel). Fix: Verifier
+  pro EPOCHE in ChainManager gecacht — konsens-neutral (reine Funktion von
+  Epoche+test_mode; Entropie war schon immer die fixe Genesis-Konstante).
+  Live-Messung: node2-IBD **23 → 354 Blöcke/min (15×)**; auf Seed UND node2
+  deployt. → **Der Join-Pfad ist damit praktikabel**: ein frischer Node holt
+  ~10k Blöcke Rückstand in ~30 min auf, statt nie zu konvergieren.
 - **Betriebs-Notiz**: `atlas-aggregator` ist via systemd an `atlas-node` gekoppelt
   (`stop atlas-node` stoppt den Aggregator mit) — bei Node-Deploys den Aggregator
   danach mit-neustarten.
