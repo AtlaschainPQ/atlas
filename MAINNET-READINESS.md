@@ -246,15 +246,24 @@ bricht der Join.
   ist intern serialisiert → keine Doppel-Anwendung). Deployt auf node2;
   verifiziert: **stetiger Fortschritt OHNE Stall/Rotate** (Höhe klettert
   durchgehend, 0 Stalls).
-- **Bug 4 — IBD-Bulk-Lieferung gedrosselt, ~1 Block/2,5 s (OFFEN, Optimierung)**:
-  Mit Bug 1–3 gefixt synct ein frischer Node **stetig**, aber nur ~1 Block/2,5 s
-  (≈ 3,5 h für 5000 Blöcke). Der GetHeaders→Headers→GetData→Block-Pfad liefert pro
-  Runde nur wenige statt der bis zu 2000 angeforderten Blöcke (Ursache noch nicht
-  isoliert — IBD-Tick=5 s, evtl. GetData-Serving oder `want`-Filterung). KEIN
-  Korrektheitsbug, nur Durchsatz; für ein angenehmes Onboarding zu optimieren.
-  → **Der Join funktioniert jetzt** (frischer Node synct verlässlich), nur noch
-  nicht schnell. Test-Setup: systemd-Dienst `atlas-node2` (Ports 18335/18336,
-  Datadir `~/.atlas-node2`, Config `~/node2.json`).
+- **Bug 4 — IBD-Selbst-Isolation: Node bannt seinen eigenen Seed (GEFIXT,
+  2026-07-04)**: Die vermutete „Durchsatz-Drosselung" entpuppte sich als
+  Fehler-Kaskade, live seziert (node2 fror bei 14104 ein, ~1 Tag unbemerkt):
+  (a) Der IBD-Tick forderte alle 5 s dieselben ~2000 Header/Blöcke an, weil der
+  `want`-Filter Orphan-gepufferte Blöcke nicht kannte → Re-Delivery-Sturm.
+  (b) Jeder re-delivered, schon angewandte Block gab die Duplicate-Strafe (-2)
+  → der Seed war in **21 s** bei Score -101 → **24-h-Ban des eigenen Seeds**.
+  (c) `connect()` gab für gebannte Peers still `Ok` zurück → der Seed-Wächter
+  loggte minütlich „Seed node connected", ohne je zu wählen. (d) Der Node zehrte
+  1,5 h den Orphan-Puffer auf und stand dann komplett. (e) Zusätzlich veraltete
+  `peer.height` (nur beim Version-Handshake gesetzt) → IBD-Gap gegen stale Werte.
+  Fixes (alle deployt auf der Sync-Seite): Seed-Whitelist im Ban-Manager; keine
+  Duplicate-Strafe für AlreadyKnown-Blöcke; `connect()` gebannt→Err + spawnt den
+  Connection-Lifecycle statt ihn zu awaiten; `want`-Filter überspringt gepufferte
+  Orphans; `peer.height` via fetch_max aus Block-/Headers-Nachrichten.
+  Diagnose-Weg: Stack-Dump (alle Worker idle → kein Deadlock) + Journal-Forensik
+  (Ban-Zeile 21:28:15). Test-Setup: systemd-Dienst `atlas-node2` (Ports
+  18335/18336, Datadir `~/.atlas-node2`, Config `~/node2.json`).
 - **Betriebs-Notiz**: `atlas-aggregator` ist via systemd an `atlas-node` gekoppelt
   (`stop atlas-node` stoppt den Aggregator mit) — bei Node-Deploys den Aggregator
   danach mit-neustarten.

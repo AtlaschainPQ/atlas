@@ -93,6 +93,13 @@ pub struct ChainManager {
     /// `l2_state_root` pro Block korrekt herauskommt. Für Reorgs wird sein
     /// kompakter Snapshot (`to_snapshot_bytes`) im `StateSnapshot` mitgesichert.
     l2_state: parking_lot::RwLock<atlas_zk::l2_state::L2State>,
+    /// TRIAD-Verifier pro EPOCHE gecacht. Seine Konstruktion generiert den
+    /// memory-harden Ableitungs-Cache (Sekunden!) — pro Block neu gebaut
+    /// drosselte das die Block-Verifikation (und damit den IBD) auf
+    /// ~1 Block/2,4 s (live seziert 2026-07-04). Konsens-neutral: der Verifier
+    /// ist eine reine Funktion von (Epoche, test_mode); die Entropie ist die
+    /// fixe Genesis-Konstante (`NetworkEntropy::new()`), wie zuvor pro Block.
+    triad_verifier: parking_lot::Mutex<Option<(u32, Arc<TriadVerifier>)>>,
 }
 
 impl ChainManager {
@@ -118,6 +125,7 @@ impl ChainManager {
             l2_state: parking_lot::RwLock::new(
                 atlas_zk::l2_state::L2State::from_genesis(&atlas_zk::genesis_allocation()),
             ),
+            triad_verifier: parking_lot::Mutex::new(None),
         }
     }
 
@@ -548,9 +556,21 @@ impl ChainManager {
             return self.apply_block(block, hash, height);
         }
 
-        // TRIAD PoW vollständig verifizieren
-        let epoch_seed = EpochSeed::for_epoch(block.header.epoch);
-        let verifier   = TriadVerifier::new(&epoch_seed, NetworkEntropy::new(), self.test_mode);
+        // TRIAD PoW vollständig verifizieren — Verifier pro Epoche wiederverwenden
+        // (Konstruktion = memory-harder Ableitungs-Cache, Sekunden; siehe Feld-Doku).
+        let verifier = {
+            let mut cached = self.triad_verifier.lock();
+            match cached.as_ref() {
+                Some((e, v)) if *e == block.header.epoch => v.clone(),
+                _ => {
+                    let epoch_seed = EpochSeed::for_epoch(block.header.epoch);
+                    let v = Arc::new(TriadVerifier::new(
+                        &epoch_seed, NetworkEntropy::new(), self.test_mode));
+                    *cached = Some((block.header.epoch, v.clone()));
+                    v
+                }
+            }
+        };
         verifier.verify(&block.header, block.header.nonce, &block.header.mix_hash)
             .map_err(|_| ChainError::Validation(ValidationError::PoWFailed))?;
 
